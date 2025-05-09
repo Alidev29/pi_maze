@@ -138,7 +138,9 @@ class MazeSolverGUI:
                 if pix[min(x, self.canvas_width-1), y] > th:
                     self.vw[r][c] = 1
         self.status.set("Loaded maze from image")
-        self._draw()    def can_move(self, r, c, dr, dc):
+        self._draw()
+
+    def can_move(self, r, c, dr, dc):
         if dr == 1: return self.hw[r+1][c]==0
         if dr == -1: return self.hw[r][c]==0
         if dc == 1: return self.vw[r][c+1]==0
