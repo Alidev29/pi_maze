@@ -4,7 +4,15 @@ from tkinter import messagebox, StringVar, simpledialog, filedialog, ttk
 from collections import deque
 import io
 import numpy as np
-from PIL import Image, ImageTk, ImageOps, ImageFilter
+from PIL import Image, ImageOps, ImageFilter
+try:
+    from PIL import ImageTk
+except ImportError:
+    messagebox.showerror("Missing Dependency", "ImageTk module not found. Installing python3-pil.imagetk may fix this issue.")
+    print("Error: ImageTk not found. Please install the python3-pil.imagetk package.")
+    print("On Raspberry Pi/Debian/Ubuntu, run: sudo apt-get install python3-pil.imagetk")
+    print("On other systems with pip: pip install pillow")
+    exit(1)
 
 class MazeSolverGUI:
     def __init__(self, master):
