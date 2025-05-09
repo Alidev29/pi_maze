@@ -1,132 +1,168 @@
 #!/usr/bin/env python3
-"""
-Improved Maze Solver GUI Application for Raspberry Pi
-Uses Tkinter for UI and NetworkX for pathfinding.
-"""
-
 import tkinter as tk
 from tkinter import messagebox, StringVar
-import networkx as nx
+from collections import deque
 
 class MazeSolverGUI:
     def __init__(self, master):
         self.master = master
         master.title("Maze Solver")
         master.geometry("800x600")
-        
-        self.rows, self.cols = 6, 4
-        self.cell_w, self.cell_h = 80, 80
-        
-        # Graph holds adjacency of walkable cells
-        self.G = nx.grid_2d_graph(self.rows, self.cols)
+
+        self.R, self.C = 6, 4
+        self.SW = 80  # cell size
+        # wall arrays: 1 = wall present
+        self.hw = [[0]*self.C for _ in range(self.R+1)]
+        self.vw = [[0]*(self.C+1) for _ in range(self.R)]
+        self._set_border_walls()
+
         self.start = self.end = None
-        
         self.mode = StringVar(value="wall")
+
         self._build_ui()
-        self._draw_grid()
-    
+        self._draw()
+
+    def _set_border_walls(self):
+        for c in range(self.C):
+            self.hw[0][c] = self.hw[self.R][c] = 1
+        for r in range(self.R):
+            self.vw[r][0] = self.vw[r][self.C] = 1
+
     def _build_ui(self):
-        # Canvas
         self.canvas = tk.Canvas(self.master,
-                                width=self.cols*self.cell_w,
-                                height=self.rows*self.cell_h,
-                                bg="white")
+            width=self.C*self.SW, height=self.R*self.SW, bg="white")
         self.canvas.pack(side=tk.LEFT, padx=10, pady=10)
         self.canvas.bind("<Button-1>", self._on_click)
-        
-        # Controls
+
         ctrl = tk.Frame(self.master)
         ctrl.pack(side=tk.RIGHT, fill=tk.Y, padx=10, pady=10)
-        
-        tk.Label(ctrl, text="Mode:").pack(anchor=tk.W)
-        for val, txt in [("wall","Toggle Wall"), ("start","Start"), ("end","End")]:
+        for val,txt in [("wall","Toggle Walls"),("start","Start"),("end","End")]:
             tk.Radiobutton(ctrl, text=txt, variable=self.mode, value=val).pack(anchor=tk.W)
-        
         tk.Button(ctrl, text="Solve", command=self.solve).pack(fill=tk.X, pady=5)
         tk.Button(ctrl, text="Clear", command=self._reset).pack(fill=tk.X, pady=5)
         tk.Button(ctrl, text="Export", command=self._export).pack(fill=tk.X, pady=5)
-        
-        self.status = StringVar(value="Click to set start/end or toggle walls")
+
+        self.status = StringVar("Click to set start/end or toggle walls")
         tk.Label(ctrl, textvariable=self.status, wraplength=150, fg="blue").pack(pady=10)
-    
-    def _draw_grid(self, path=None):
+
+    def _draw(self, path=None):
         self.canvas.delete("all")
-        # draw cells
-        for r in range(self.rows):
-            for c in range(self.cols):
-                x, y = c*self.cell_w, r*self.cell_h
+        # cells
+        for r in range(self.R):
+            for c in range(self.C):
+                x,y = c*self.SW, r*self.SW
                 fill = "white"
-                if (r,c) == self.start: fill="green"
-                elif (r,c) == self.end: fill="red"
-                elif path and (r,c) in path: fill="light blue"
-                self.canvas.create_rectangle(x,y, x+self.cell_w,y+self.cell_h,
-                                             fill=fill, outline="black")
-        # draw removed edges as walls
-        for (u,v) in set(nx.grid_2d_graph(self.rows,self.cols).edges()) - set(self.G.edges()):
-            (r1,c1),(r2,c2) = u,v
-            x1,y1 = (c1+0.5)*self.cell_w,(r1+0.5)*self.cell_h
-            x2,y2 = (c2+0.5)*self.cell_w,(r2+0.5)*self.cell_h
-            self.canvas.create_line(x1,y1, x2,y2, width=6, fill="black")
-    
+                if (r,c)==self.start: fill="green"
+                elif (r,c)==self.end: fill="red"
+                elif path and (r,c) in path: fill="lightblue"
+                self.canvas.create_rectangle(x,y,x+self.SW,y+self.SW, fill=fill, outline="black")
+        # walls
+        for r in range(self.R+1):
+            for c in range(self.C):
+                if self.hw[r][c]:
+                    x1,y1 = c*self.SW, r*self.SW
+                    self.canvas.create_line(x1,y1, x1+self.SW,y1, width=4)
+        for r in range(self.R):
+            for c in range(self.C+1):
+                if self.vw[r][c]:
+                    x1,y1 = c*self.SW, r*self.SW
+                    self.canvas.create_line(x1,y1, x1,y1+self.SW, width=4)
+
     def _on_click(self, ev):
-        c, r = ev.x//self.cell_w, ev.y//self.cell_h
-        if not (0<=r<self.rows and 0<=c<self.cols): return
-        cell = (r,c)
-        m = self.mode.get()
-        if m == "start":
-            self.start = cell
-            self.status.set(f"Start set to {cell}")
-        elif m == "end":
-            self.end = cell
-            self.status.set(f"End set to {cell}")
-        else:  # toggle wall
-            # find neighbor by clicking midpoint of two cells?
-            # instead, toggle all incident edges to isolate cell if clicked twice?
-            # Better: right‐click neighbor cell to remove individual edge—skip here
-            # For simplicity, toggle connections to all four neighbors
-            for dr,dc in [(1,0),(-1,0),(0,1),(0,-1)]:
-                nb = (r+dr,c+dc)
-                if 0<=nb[0]<self.rows and 0<=nb[1]<self.cols:
-                    if self.G.has_edge(cell, nb):
-                        self.G.remove_edge(cell, nb)
+        c, r = ev.x//self.SW, ev.y//self.SW
+        if not (0<=r<self.R and 0<=c<self.C): return
+        if self.mode.get()=="start":
+            self.start=(r,c); self.status.set(f"Start={self.start}")
+        elif self.mode.get()=="end":
+            self.end=(r,c); self.status.set(f"End={self.end}")
+        else:
+            # toggle all 4 walls around (r,c)
+            for dr,dc,arr,idx in [
+                (-1,0,self.hw,r), (1,0,self.hw,r+1),
+                (0,-1,self.vw,r), (0,1,self.vw,r)
+            ]:
+                rr,cc = r+dr, c+dc
+                if 0<=rr<=self.R and 0<=cc<self.C+ (1 if arr is self.vw else 0):
+                    if arr is self.hw:
+                        arr[idx][c] ^= 1
                     else:
-                        self.G.add_edge(cell, nb)
-            self.status.set(f"Toggled walls around {cell}")
-        self._draw_grid()
-    
+                        arr[r][c+ (0 if dr else (dc>0))] ^= 1
+            self.status.set(f"Toggled walls @{(r,c)}")
+        self._draw()
+
     def solve(self):
         if not self.start or not self.end:
-            messagebox.showwarning("Need start/end","Set both start and end first")
+            messagebox.showwarning("Need start+end","Please set both")
             return
-        try:
-            path = nx.shortest_path(self.G, self.start, self.end)
-            self._draw_grid(path)
-            self.status.set(f"Path found ({len(path)} steps)")
-        except nx.NetworkXNoPath:
-            messagebox.showinfo("No Path","No route available")
-            self.status.set("No path")
-    
+        prev = {}
+        dq = deque([self.start])
+        prev[self.start]=None
+        while dq:
+            u = dq.popleft()
+            if u==self.end: break
+            r,c = u
+            for dr,dc in [(1,0),(-1,0),(0,1),(0,-1)]:
+                nr, nc = r+dr, c+dc
+                if 0<=nr<self.R and 0<=nc<self.C:
+                    # check wall between u and (nr,nc)
+                    if dr and self.hw[min(r,nr)+ (dr<0)][c]: continue
+                    if dc and self.vw[r][min(c,nc)+ (dc<0)]: continue
+                    v = (nr,nc)
+                    if v not in prev:
+                        prev[v]=u
+                        dq.append(v)
+        if self.end not in prev:
+            messagebox.showinfo("No path","Cannot reach end")
+            return
+        # reconstruct
+        path = []
+        cur = self.end
+        while cur:
+            path.append(cur); cur = prev[cur]
+        path.reverse()
+        self._draw(path)
+        self.status.set(f"Found path ({len(path)} steps)")
+
     def _reset(self):
-        self.G = nx.grid_2d_graph(self.rows, self.cols)
+        self.hw = [[0]*self.C for _ in range(self.R+1)]
+        self.vw = [[0]*(self.C+1) for _ in range(self.R)]
+        self._set_border_walls()
         self.start = self.end = None
         self.status.set("Cleared")
-        self._draw_grid()
-    
+        self._draw()
+
     def _export(self):
         if not self.start or not self.end:
             messagebox.showwarning("Nothing to export","Solve first")
             return
-        try:
-            path = nx.shortest_path(self.G, self.start, self.end)
-            with open("maze_solution.txt","w") as f:
-                for i,cell in enumerate(path,1):
-                    f.write(f"Step {i}: {cell}\n")
-            messagebox.showinfo("Exported","Saved to maze_solution.txt")
-        except Exception as e:
-            messagebox.showerror("Export Error", str(e))
-
+        prev = {}
+        dq = deque([self.start]); prev[self.start]=None
+        while dq:
+            u=dq.popleft()
+            if u==self.end: break
+            r,c=u
+            for dr,dc in [(1,0),(-1,0),(0,1),(0,-1)]:
+                nr, nc = r+dr, c+dc
+                if 0<=nr<self.R and 0<=nc<self.C:
+                    if dr and self.hw[min(r,nr)+ (dr<0)][c]: continue
+                    if dc and self.vw[r][min(c,nc)+ (dc<0)]: continue
+                    v=(nr,nc)
+                    if v not in prev:
+                        prev[v]=u; dq.append(v)
+        if self.end not in prev:
+            messagebox.showinfo("No path","Nothing to export")
+            return
+        # write file
+        path, cur = [], self.end
+        while cur:
+            path.append(cur); cur=prev[cur]
+        path.reverse()
+        with open("maze_solution.txt","w") as f:
+            for i,cell in enumerate(path,1):
+                f.write(f"{i}: {cell}\n")
+        messagebox.showinfo("Exported","Saved maze_solution.txt")
 
 if __name__=="__main__":
     root = tk.Tk()
-    app = MazeSolverGUI(root)
+    MazeSolverGUI(root)
     root.mainloop()
