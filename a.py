@@ -24,8 +24,8 @@ class MazeSolverGUI:
         self.processed_image = None
         
         # Default maze dimensions
-        self.R = 20
-        self.C = 20
+        self.R = 4
+        self.C = 4
         
         # Compute canvas and cell size
         canvas_size = 600
@@ -139,8 +139,8 @@ class MazeSolverGUI:
             new_r = int(self.rows_var.get())
             new_c = int(self.cols_var.get())
             
-            if new_r < 5 or new_c < 5 or new_r > 100 or new_c > 100:
-                messagebox.showwarning("Invalid Size", "Please enter rows and columns between 5 and 100")
+            if new_r < 4 or new_c < 4 or new_r > 100 or new_c > 100:
+                messagebox.showwarning("Invalid Size", "Please enter rows and columns between 4 and 100")
                 return
                 
             self.R = new_r
