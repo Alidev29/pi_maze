@@ -110,27 +110,35 @@ class MazeSolverGUI:
     def _load_image(self):
         file = filedialog.askopenfilename(filetypes=[('PNG','*.png'),('JPEG','*.jpg;*.jpeg')])
         if not file: return
+        # Load and convert image to grayscale
         img = Image.open(file).convert('L')
+        # Invert so walls (dark) become bright
         img = ImageOps.invert(img)
-        img = img.resize((self.C, self.R), Image.NEAREST)
-        pixels = img.load()
-        # Clear existing walls then detect
+        # Resize to canvas size
+        img = img.resize((self.canvas_width, self.canvas_height), Image.BILINEAR)
+        pix = img.load()
+        # Reset walls
         self.hw = [[0]*self.C for _ in range(self.R+1)]
         self.vw = [[0]*(self.C+1) for _ in range(self.R)]
         self._set_border_walls()
-        # Detect walls: dark pixel means wall on cell
+        # Threshold for wall detection
+        th = 200
+        # Detect horizontal walls: sample midpoint of each cell edge
         for r in range(self.R+1):
+            y = int(r * self.SW)
             for c in range(self.C):
-                if pixels[c, max(0, r-1)] > 128:  # pixel row at boundary
+                x = int(c * self.SW + self.SW/2)
+                if pix[x, min(y, self.canvas_height-1)] > th:
                     self.hw[r][c] = 1
-        for r in range(self.R):
-            for c in range(self.C+1):
-                if pixels[max(0, c-1), r] > 128:
+        # Detect vertical walls
+        for c in range(self.C+1):
+            x = int(c * self.SW)
+            for r in range(self.R):
+                y = int(r * self.SW + self.SW/2)
+                if pix[min(x, self.canvas_width-1), y] > th:
                     self.vw[r][c] = 1
-        self.status.set(f"Loaded maze from image")
-        self._draw()
-
-    def can_move(self, r, c, dr, dc):
+        self.status.set("Loaded maze from image")
+        self._draw()    def can_move(self, r, c, dr, dc):
         if dr == 1: return self.hw[r+1][c]==0
         if dr == -1: return self.hw[r][c]==0
         if dc == 1: return self.vw[r][c+1]==0
