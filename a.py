@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
 import tkinter as tk
-from tkinter import messagebox, StringVar, simpledialog
+from tkinter import messagebox, StringVar, simpledialog, filedialog
 from collections import deque
+import io
+from PIL import Image
 
 class MazeSolverGUI:
     def __init__(self, master):
         self.master = master
         master.title("Maze Solver")
-        master.geometry("900x700")
+        master.geometry("1000x700")
 
         # Prompt for maze dimensions
         self.R = simpledialog.askinteger("Rows", "Enter number of rows:", parent=self.master, minvalue=1, maxvalue=50)
@@ -17,7 +19,7 @@ class MazeSolverGUI:
             master.destroy()
             return
 
-        # Setup canvas
+        # Compute canvas and cell size
         canvas_size = 600
         self.SW = canvas_size // max(self.C, self.R)
         self.canvas_width = self.C * self.SW
@@ -41,10 +43,12 @@ class MazeSolverGUI:
             self.vw[r][0] = self.vw[r][self.C] = 1
 
     def _build_ui(self):
+        # Canvas
         self.canvas = tk.Canvas(self.master, width=self.canvas_width, height=self.canvas_height, bg="white")
         self.canvas.pack(side=tk.LEFT, padx=10, pady=10)
         self.canvas.bind("<Button-1>", self._on_click)
 
+        # Controls frame
         ctrl = tk.Frame(self.master)
         ctrl.pack(side=tk.RIGHT, fill=tk.Y, padx=10, pady=10)
 
@@ -54,7 +58,8 @@ class MazeSolverGUI:
 
         tk.Button(ctrl, text="Solve", command=self.solve).pack(fill=tk.X, pady=5)
         tk.Button(ctrl, text="Clear", command=self._reset).pack(fill=tk.X, pady=5)
-        tk.Button(ctrl, text="Export", command=self._export).pack(fill=tk.X, pady=5)
+        tk.Button(ctrl, text="Export Path", command=self._export_path).pack(fill=tk.X, pady=5)
+        tk.Button(ctrl, text="Save Image", command=self._export_image).pack(fill=tk.X, pady=5)
 
         self.status = StringVar(master=self.master, value="Click to set start/end or toggle walls")
         tk.Label(ctrl, textvariable=self.status, wraplength=150, fg="blue").pack(pady=10)
@@ -129,16 +134,14 @@ class MazeSolverGUI:
             for dr, dc in [(1,0),(-1,0),(0,1),(0,-1)]:
                 nr, nc = r+dr, c+dc
                 if 0<=nr<self.R and 0<=nc<self.C and (nr,nc) not in prev and self.can_move(r,c,dr,dc):
-                    prev[(nr,nc)] = (r,c)
-                    dq.append((nr,nc))
+                    prev[(nr,nc)] = (r,c); dq.append((nr,nc))
         if self.end not in prev:
             messagebox.showinfo("No path", "Cannot reach end")
             self.status.set("No path found")
             return
         path, cur = [], self.end
         while cur:
-            path.append(cur)
-            cur = prev[cur]
+            path.append(cur); cur = prev[cur]
         path.reverse()
         self._draw(path)
         self.status.set(f"Path found ({len(path)} steps)")
@@ -151,32 +154,40 @@ class MazeSolverGUI:
         self.status.set("Cleared")
         self._draw()
 
-    def _export(self):
-        # Export same BFS logic as solve
+    def _export_path(self):
         if not self.start or not self.end:
             messagebox.showwarning("Nothing to export", "Solve the maze first")
             return
-        prev = {self.start: None}
-        dq = deque([self.start])
+        # Reuse solve BFS to get path
+        prev = {self.start: None}; dq = deque([self.start])
         while dq:
             r, c = dq.popleft()
             if (r,c) == self.end: break
             for dr, dc in [(1,0),(-1,0),(0,1),(0,-1)]:
                 nr, nc = r+dr, c+dc
                 if 0<=nr<self.R and 0<=nc<self.C and (nr,nc) not in prev and self.can_move(r,c,dr,dc):
-                    prev[(nr,nc)] = (r,c)
-                    dq.append((nr,nc))
+                    prev[(nr,nc)] = (r,c); dq.append((nr,nc))
         if self.end not in prev:
             messagebox.showinfo("No path", "Nothing to export")
             return
         path, cur = [], self.end
         while cur:
-            path.append(cur)
-            cur = prev[cur]
+            path.append(cur); cur = prev[cur]
         path.reverse()
         with open("maze_solution.txt","w") as f:
             for i,cell in enumerate(path,1): f.write(f"Step {i}: {cell}\n")
         messagebox.showinfo("Exported","Saved maze_solution.txt")
+
+    def _export_image(self):
+        # Ask for filename
+        file = filedialog.asksaveasfilename(defaultextension='.png', filetypes=[('PNG','*.png')])
+        if not file: return
+        # Get postscript from canvas
+        ps = self.canvas.postscript(colormode='color')
+        # Convert using PIL
+        img = Image.open(io.BytesIO(ps.encode('utf-8')))
+        img.save(file)
+        messagebox.showinfo("Image Saved", f"Maze image saved to {file}")
 
 if __name__ == "__main__":
     root = tk.Tk()
