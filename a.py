@@ -111,7 +111,7 @@ class MazeSolverGUI:
         self.cols_var = tk.StringVar(value=str(self.C))
         tk.Entry(size_frame, textvariable=self.cols_var, width=5).grid(row=1, column=1, padx=5, pady=2)
         
-        tk.Button(size_frame, text="Apply Size", command=self._apply_size).pack(fill=tk.X, pady=5)
+        tk.Button(size_frame, text="Apply Size", command=self._apply_size).grid(row=2, column=0, columnspan=2, pady=5, sticky=tk.EW)
         
         # Mode section
         mode_frame = tk.LabelFrame(ctrl, text="Edit Mode", padx=5, pady=5)
