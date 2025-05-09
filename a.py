@@ -172,11 +172,16 @@ class MazeSolverGUI:
             return
             
         try:
+            print(f"Loading image from: {file_path}")
             self.image_source = Image.open(file_path)
+            print(f"Image loaded: {self.image_source.width}x{self.image_source.height}")
             self.status.set(f"Image loaded: {file_path}")
             self._update_preview()
         except Exception as e:
+            print(f"Error loading image: {str(e)}")
             messagebox.showerror("Error", f"Failed to open image: {str(e)}")
+            import traceback
+            traceback.print_exc()
 
     def _take_photo(self):
         try:
@@ -193,77 +198,112 @@ class MazeSolverGUI:
         if not self.image_source:
             return
             
-        # Process the image based on current settings
-        img = self.image_source.copy()
-        
-        # Resize for preview
-        preview_width = 300
-        ratio = preview_width / img.width
-        preview_height = int(img.height * ratio)
-        img = img.resize((preview_width, preview_height), Image.LANCZOS)
-        
-        # Process based on current settings
-        if self.edge_sensitivity.get() > 0:
-            # Edge detection
-            img = img.convert("L")
-            img = img.filter(ImageFilter.FIND_EDGES)
-            img = img.point(lambda x: 255 if x > self.edge_sensitivity.get() else 0)
-        else:
-            # Simple threshold
-            img = img.convert("L")
-            img = img.point(lambda x: 255 if x > self.threshold_var.get() else 0)
-        
-        self.processed_image = img
-        
-        # Display the preview
-        img_tk = ImageTk.PhotoImage(img)
-        self.preview_canvas.config(width=img.width, height=img.height)
-        self.preview_canvas.create_image(0, 0, anchor=tk.NW, image=img_tk)
-        self.preview_canvas.image = img_tk  # Keep a reference
+        try:
+            # Process the image based on current settings
+            img = self.image_source.copy()
+            
+            # Print debug info
+            print(f"Updating preview with threshold: {self.threshold_var.get()}, edge sensitivity: {self.edge_sensitivity.get()}")
+            
+            # Resize for preview
+            preview_width = 300
+            ratio = preview_width / img.width
+            preview_height = int(img.height * ratio)
+            img = img.resize((preview_width, preview_height), Image.LANCZOS)
+            
+            # Process based on current settings
+            if self.edge_sensitivity.get() > 0:
+                # Edge detection
+                img = img.convert("L")
+                img = img.filter(ImageFilter.FIND_EDGES)
+                img = img.point(lambda x: 255 if x > self.edge_sensitivity.get() else 0)
+                print("Applied edge detection")
+            else:
+                # Simple threshold
+                img = img.convert("L")
+                img = img.point(lambda x: 255 if x > self.threshold_var.get() else 0)
+                print("Applied threshold")
+            
+            self.processed_image = img
+            print(f"Processed image size: {img.width}x{img.height}")
+            
+            # Display the preview
+            try:
+                img_tk = ImageTk.PhotoImage(img)
+                self.preview_canvas.config(width=img.width, height=img.height)
+                self.preview_canvas.create_image(0, 0, anchor=tk.NW, image=img_tk)
+                self.preview_canvas.image = img_tk  # Keep a reference
+                print("Preview updated successfully")
+            except NameError:
+                # If ImageTk is not available
+                print("ImageTk not available, skipping preview")
+                self.status.set("Image processed (preview not available)")
+        except Exception as e:
+            print(f"Error updating preview: {str(e)}")
+            self.status.set(f"Error updating preview: {str(e)}")
+            import traceback
+            traceback.print_exc()
 
     def _convert_to_maze(self):
         if not self.processed_image:
             messagebox.showwarning("No Image", "Please load an image first")
             return
             
-        # Resize the processed image to match our maze dimensions
-        img = self.processed_image.resize((self.C, self.R), Image.LANCZOS)
-        img_data = np.array(img)
-        
-        # Reset walls
-        self.hw = [[0] * self.C for _ in range(self.R + 1)]
-        self.vw = [[0] * (self.C + 1) for _ in range(self.R)]
-        
-        # Set horizontal walls
-        for r in range(self.R + 1):
-            for c in range(self.C):
-                # Check pixels above and below the wall
-                r_above = max(0, min(r-1, self.R-1))
-                r_below = min(r, self.R-1)
-                
-                # If there's a significant difference, set a wall
-                if r == 0 or r == self.R or abs(int(img_data[r_above, c]) - int(img_data[r_below, c])) > 127:
-                    self.hw[r][c] = 1
-        
-        # Set vertical walls
-        for r in range(self.R):
-            for c in range(self.C + 1):
-                # Check pixels to left and right of the wall
-                c_left = max(0, min(c-1, self.C-1))
-                c_right = min(c, self.C-1)
-                
-                # If there's a significant difference, set a wall
-                if c == 0 or c == self.C or abs(int(img_data[r, c_left]) - int(img_data[r, c_right])) > 127:
-                    self.vw[r][c] = 1
-        
-        # Ensure border walls
-        self._set_border_walls()
-        
-        # Clear start and end points
-        self.start = self.end = None
-        
-        self.status.set("Image converted to maze")
-        self._draw()
+        try:
+            # Resize the processed image to match our maze dimensions
+            img = self.processed_image.resize((self.C, self.R), Image.LANCZOS)
+            img_data = np.array(img)
+            
+            # Reset walls
+            self.hw = [[0] * self.C for _ in range(self.R + 1)]
+            self.vw = [[0] * (self.C + 1) for _ in range(self.R)]
+            
+            # Debug info
+            print(f"Image shape: {img_data.shape}")
+            print(f"Converting image to maze of size {self.R}x{self.C}")
+            
+            threshold = self.threshold_var.get()
+            print(f"Using threshold: {threshold}")
+            
+            # Set horizontal walls
+            for r in range(self.R + 1):
+                for c in range(self.C):
+                    # Check pixels above and below the wall
+                    r_above = max(0, min(r-1, self.R-1))
+                    r_below = min(r, self.R-1)
+                    
+                    # Border walls are always present
+                    if r == 0 or r == self.R:
+                        self.hw[r][c] = 1
+                    # Interior walls based on image intensity difference
+                    elif abs(int(img_data[r_above, c]) - int(img_data[r_below, c])) > threshold//2:
+                        self.hw[r][c] = 1
+            
+            # Set vertical walls
+            for r in range(self.R):
+                for c in range(self.C + 1):
+                    # Check pixels to left and right of the wall
+                    c_left = max(0, min(c-1, self.C-1))
+                    c_right = min(c, self.C-1)
+                    
+                    # Border walls are always present
+                    if c == 0 or c == self.C:
+                        self.vw[r][c] = 1
+                    # Interior walls based on image intensity difference
+                    elif abs(int(img_data[r, c_left]) - int(img_data[r, c_right])) > threshold//2:
+                        self.vw[r][c] = 1
+            
+            # Clear start and end points
+            self.start = self.end = None
+            
+            self.status.set("Image successfully converted to maze")
+            self._draw()
+            
+        except Exception as e:
+            print(f"Error converting image to maze: {str(e)}")
+            messagebox.showerror("Conversion Error", f"Failed to convert image: {str(e)}")
+            import traceback
+            traceback.print_exc()
 
     def _draw(self, path=None):
         self.canvas.delete("all")
