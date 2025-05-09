@@ -1,20 +1,26 @@
 #!/usr/bin/env python3
 import tkinter as tk
-from tkinter import messagebox, StringVar
+from tkinter import messagebox, StringVar, simpledialog
 from collections import deque
 
 class MazeSolverGUI:
     def __init__(self, master):
         self.master = master
         master.title("Maze Solver")
-        master.geometry("800x600")
+        master.geometry("900x700")
 
-        self.R, self.C = 6, 4
-        self.SW = 80  # cell size in pixels
+        # Ask user for maze size
+        self.R = simpledialog.askinteger("Rows", "Enter number of rows:", parent=self.master, minvalue=1, maxvalue=50)
+        self.C = simpledialog.askinteger("Columns", "Enter number of columns:", parent=self.master, minvalue=1, maxvalue=50)
+        if not self.R or not self.C:
+            messagebox.showerror("Error", "Invalid maze size. Exiting.")
+            master.destroy()
+            return
 
+        self.SW = 600 // max(self.C, self.R)  # cell size to fit canvas
         # wall arrays: 1 = wall present
-        self.hw = [[0]*self.C for _ in range(self.R+1)]
-        self.vw = [[0]*(self.C+1) for _ in range(self.R)]
+        self.hw = [[0] * self.C for _ in range(self.R+1)]
+        self.vw = [[0] * (self.C+1) for _ in range(self.R)]
         self._set_border_walls()
 
         self.start = self.end = None
@@ -139,8 +145,8 @@ class MazeSolverGUI:
         self.status.set(f"Path found ({len(path)} steps)")
 
     def _reset(self):
-        self.hw = [[0]*self.C for _ in range(self.R+1)]
-        self.vw = [[0]*(self.C+1) for _ in range(self.R)]
+        self.hw = [[0] * self.C for _ in range(self.R+1)]
+        self.vw = [[0] * (self.C+1) for _ in range(self.R)]
         self._set_border_walls()
         self.start = self.end = None
         self.status.set("Cleared")
@@ -163,7 +169,7 @@ class MazeSolverGUI:
                 nr, nc = r+dr, c+dc
                 if 0 <= nr < self.R and 0 <= nc < self.C and (nr,nc) not in prev:
                     if dr and self.hw[min(r,nr)+ (dr<0)][c]:   continue
-                    if dc and self.vw[r][min(c,nc)+ (dc<0)]:   continue
+                    if dc and self.vw[r][min(c<nc)+ (dc<0)]:   continue
                     prev[(nr,nc)] = u
                     dq.append((nr,nc))
 
