@@ -11,7 +11,7 @@ import serial.tools.list_ports
 from PIL import Image
 
 class MazeSolverGUI:
-    def _init_(self, master):
+    def __init__(self, master):
         self.master = master
         master.title("Maze Solver with Arduino Control")
         master.geometry("1200x700")
