@@ -613,7 +613,9 @@ class MazeSolverGUI:
                     self._draw(self.path)
                 except (ValueError, IndexError):
                     pass
-                    
+        except Exception as e:
+            self._log(f"Error processing feedback: {str(e)}")
+    
     def _update_car_location(self, step_index):
         """Update car location based on current step in path execution"""
         if not self.path or step_index >= len(self.path):
