@@ -1,31 +1,18 @@
 #!/usr/bin/env python3
 import tkinter as tk
-from tkinter import messagebox, StringVar, simpledialog, filedialog, ttk
+from tkinter import messagebox, StringVar, filedialog
 from collections import deque
 import io
-import numpy as np
-from PIL import Image, ImageOps, ImageFilter
-try:
-    from PIL import ImageTk
-except ImportError:
-    messagebox.showerror("Missing Dependency", "ImageTk module not found. Installing python3-pil.imagetk may fix this issue.")
-    print("Error: ImageTk not found. Please install the python3-pil.imagetk package.")
-    print("On Raspberry Pi/Debian/Ubuntu, run: sudo apt-get install python3-pil.imagetk")
-    print("On other systems with pip: pip install pillow")
-    exit(1)
 
 class MazeSolverGUI:
     def __init__(self, master):
         self.master = master
         master.title("Maze Solver")
-        master.geometry("1200x700")
-        
-        self.image_source = None
-        self.processed_image = None
+        master.geometry("900x700")
         
         # Default maze dimensions
-        self.R = 4
-        self.C = 4
+        self.R = 10
+        self.C = 10
         
         # Compute canvas and cell size
         canvas_size = 600
@@ -40,9 +27,6 @@ class MazeSolverGUI:
 
         self.start = self.end = None
         self.mode = StringVar(master=self.master, value="wall")
-        
-        self.threshold_var = tk.IntVar(value=128)
-        self.edge_sensitivity = tk.IntVar(value=50)
 
         self._build_ui()
         self._draw()
@@ -69,35 +53,40 @@ class MazeSolverGUI:
         self.canvas.pack(fill=tk.BOTH, expand=True)
         self.canvas.bind("<Button-1>", self._on_click)
         
-        # Image preview frame
-        self.preview_frame = tk.Frame(left_frame)
-        self.preview_frame.pack(fill=tk.X, pady=10)
-        
-        self.preview_canvas = tk.Canvas(self.preview_frame, width=300, height=200, bg="lightgray")
-        self.preview_canvas.pack(side=tk.LEFT, padx=5)
-        
-        preview_controls = tk.Frame(self.preview_frame)
-        preview_controls.pack(side=tk.LEFT, fill=tk.Y, padx=10)
-        
-        tk.Label(preview_controls, text="Threshold:").pack(anchor=tk.W)
-        tk.Scale(preview_controls, from_=0, to=255, orient=tk.HORIZONTAL, 
-                 variable=self.threshold_var, command=self._update_preview).pack(fill=tk.X)
-        
-        tk.Label(preview_controls, text="Edge Sensitivity:").pack(anchor=tk.W)
-        tk.Scale(preview_controls, from_=0, to=100, orient=tk.HORIZONTAL, 
-                variable=self.edge_sensitivity, command=self._update_preview).pack(fill=tk.X)
-        
         # Controls frame
         ctrl = tk.Frame(main_frame)
         ctrl.pack(side=tk.RIGHT, fill=tk.Y, padx=10, pady=10)
 
-        # Image section
-        image_frame = tk.LabelFrame(ctrl, text="Image to Maze", padx=5, pady=5)
-        image_frame.pack(fill=tk.X, pady=10)
+        # Text file section
+        txt_frame = tk.LabelFrame(ctrl, text="Text File Import", padx=5, pady=5)
+        txt_frame.pack(fill=tk.X, pady=10)
         
-        tk.Button(image_frame, text="Load Image", command=self._load_image).pack(fill=tk.X, pady=2)
-        tk.Button(image_frame, text="Take Photo", command=self._take_photo).pack(fill=tk.X, pady=2)
-        tk.Button(image_frame, text="Convert to Maze", command=self._convert_to_maze).pack(fill=tk.X, pady=2)
+        tk.Button(txt_frame, text="Load Text Maze", command=self._load_text_maze).pack(fill=tk.X, pady=2)
+        
+        # Example section
+        example_frame = tk.LabelFrame(ctrl, text="Text Format Example", padx=5, pady=5)
+        example_frame.pack(fill=tk.X, pady=10)
+        
+        example_text = (
+            "Example format:\n"
+            "###########\n"
+            "#   #     #\n"
+            "# # # ### #\n"
+            "# #   #   #\n"
+            "# ##### # #\n"
+            "#     # # #\n"
+            "##### # # #\n"
+            "#   # # # #\n"
+            "# # ### # #\n"
+            "#S#     #E#\n"
+            "###########\n"
+            "Where:\n"
+            "# = Wall\n"
+            "  = Path\n"
+            "S = Start\n"
+            "E = End"
+        )
+        tk.Label(example_frame, text=example_text, justify=tk.LEFT).pack(anchor=tk.W)
         
         # Maze size section
         size_frame = tk.LabelFrame(ctrl, text="Maze Size", padx=5, pady=5)
@@ -128,12 +117,170 @@ class MazeSolverGUI:
         tk.Button(action_frame, text="Clear Maze", command=self._reset).pack(fill=tk.X, pady=2)
         tk.Button(action_frame, text="Export Path", command=self._export_path).pack(fill=tk.X, pady=2)
         tk.Button(action_frame, text="Save Image", command=self._export_image).pack(fill=tk.X, pady=2)
+        tk.Button(action_frame, text="Save As Text", command=self._save_as_text).pack(fill=tk.X, pady=2)
 
         # Status bar
-        self.status = StringVar(master=self.master, value="Click to set start/end or toggle walls")
+        self.status = StringVar(master=self.master, value="Ready")
         status_bar = tk.Label(self.master, textvariable=self.status, bd=1, relief=tk.SUNKEN, anchor=tk.W)
         status_bar.pack(side=tk.BOTTOM, fill=tk.X)
-
+    
+    def _load_text_maze(self):
+        file_path = filedialog.askopenfilename(
+            filetypes=[("Text files", "*.txt"), ("All files", "*.*")]
+        )
+        if not file_path:
+            return
+            
+        try:
+            # Read the file
+            with open(file_path, 'r') as f:
+                lines = [line.rstrip() for line in f.readlines()]
+            
+            # Filter out empty lines
+            lines = [line for line in lines if line]
+            
+            if not lines:
+                messagebox.showerror("Error", "File is empty")
+                return
+                
+            # Calculate maze dimensions
+            height = len(lines)
+            width = max(len(line) for line in lines)
+            
+            # Resize the maze
+            self.R = height - 2  # Subtract borders
+            self.C = width - 2   # Subtract borders
+            
+            if self.R < 1 or self.C < 1:
+                messagebox.showerror("Error", "Invalid maze dimensions")
+                return
+                
+            # Update UI values
+            self.rows_var.set(str(self.R))
+            self.cols_var.set(str(self.C))
+            
+            # Reinitialize maze walls
+            self.hw = [[0] * self.C for _ in range(self.R + 1)]
+            self.vw = [[0] * (self.C + 1) for _ in range(self.R)]
+            self.start = self.end = None
+            
+            # Set borders
+            self._set_border_walls()
+            
+            # Parse the text maze
+            for r in range(height):
+                line = lines[r].ljust(width)  # Pad line to full width
+                for c in range(width):
+                    if c >= len(line):
+                        continue
+                        
+                    ch = line[c]
+                    
+                    if r == 0 or r == height-1 or c == 0 or c == width-1:
+                        # Borders should be walls
+                        continue
+                        
+                    # Adjust coordinates for internal grid
+                    maze_r = r - 1
+                    maze_c = c - 1
+                    
+                    if ch == '#':
+                        # Add walls around this cell
+                        self.hw[maze_r][maze_c] = 1      # Top wall
+                        self.hw[maze_r+1][maze_c] = 1    # Bottom wall
+                        self.vw[maze_r][maze_c] = 1      # Left wall
+                        self.vw[maze_r][maze_c+1] = 1    # Right wall
+                    elif ch == 'S' or ch == 's':
+                        self.start = (maze_r, maze_c)
+                    elif ch == 'E' or ch == 'e':
+                        self.end = (maze_r, maze_c)
+            
+            # Connect adjacent empty spaces by removing shared walls
+            for r in range(self.R):
+                for c in range(self.C):
+                    r_txt = r + 1  # Adjust back to text coordinates
+                    c_txt = c + 1
+                    
+                    curr_ch = '#' if r_txt >= len(lines) or c_txt >= len(lines[r_txt]) else lines[r_txt][c_txt]
+                    
+                    if curr_ch != '#':
+                        # Check right neighbor
+                        if c+1 < self.C:
+                            right_ch = '#' if r_txt >= len(lines) or c_txt+1 >= len(lines[r_txt]) else lines[r_txt][c_txt+1]
+                            if right_ch != '#':
+                                self.vw[r][c+1] = 0  # Remove wall between them
+                        
+                        # Check bottom neighbor
+                        if r+1 < self.R:
+                            bottom_ch = '#' if r_txt+1 >= len(lines) or c_txt >= len(lines[r_txt+1]) else lines[r_txt+1][c_txt]
+                            if bottom_ch != '#':
+                                self.hw[r+1][c] = 0  # Remove wall between them
+            
+            # Recalculate canvas size
+            canvas_size = 600
+            self.SW = canvas_size // max(self.C, self.R)
+            self.canvas_width = self.C * self.SW
+            self.canvas_height = self.R * self.SW
+            
+            # Update canvas size
+            self.canvas.config(width=self.canvas_width, height=self.canvas_height)
+            
+            self.status.set(f"Loaded maze from {file_path}")
+            self._draw()
+            
+        except Exception as e:
+            print(f"Error loading maze: {str(e)}")
+            messagebox.showerror("Error", f"Failed to load maze: {str(e)}")
+            import traceback
+            traceback.print_exc()
+    
+    def _save_as_text(self):
+        file_path = filedialog.asksaveasfilename(
+            defaultextension='.txt',
+            filetypes=[("Text files", "*.txt"), ("All files", "*.*")]
+        )
+        if not file_path:
+            return
+            
+        try:
+            # Create a 2D grid representation of the maze
+            # Use '#' for walls, ' ' for paths, 'S' for start, 'E' for end
+            grid = [[' ' for _ in range(self.C+2)] for _ in range(self.R+2)]
+            
+            # Set borders
+            for r in range(self.R+2):
+                grid[r][0] = grid[r][self.C+1] = '#'
+            for c in range(self.C+2):
+                grid[0][c] = grid[self.R+1][c] = '#'
+            
+            # Mark walls in the grid
+            for r in range(self.R):
+                for c in range(self.C):
+                    has_wall = False
+                    
+                    # Check walls around this cell
+                    if self.hw[r][c] == 1 and self.hw[r+1][c] == 1 and \
+                       self.vw[r][c] == 1 and self.vw[r][c+1] == 1:
+                        grid[r+1][c+1] = '#'  # Cell is completely walled
+                        has_wall = True
+                    
+                    # If this cell has start or end point, mark it
+                    if (r, c) == self.start:
+                        grid[r+1][c+1] = 'S'
+                    elif (r, c) == self.end:
+                        grid[r+1][c+1] = 'E'
+            
+            # Write to file
+            with open(file_path, 'w') as f:
+                for row in grid:
+                    f.write(''.join(row) + '\n')
+            
+            self.status.set(f"Maze saved as text to {file_path}")
+            
+        except Exception as e:
+            print(f"Error saving maze: {str(e)}")
+            messagebox.showerror("Error", f"Failed to save maze: {str(e)}")
+    
     def _apply_size(self):
         try:
             new_r = int(self.rows_var.get())
@@ -158,152 +305,15 @@ class MazeSolverGUI:
             self._set_border_walls()
             
             self.start = self.end = None
+            
+            # Update canvas size
+            self.canvas.config(width=self.canvas_width, height=self.canvas_height)
+            
             self.status.set(f"Maze size changed to {self.R}x{self.C}")
             self._draw()
             
         except ValueError:
             messagebox.showwarning("Invalid Input", "Please enter valid numbers for rows and columns")
-
-    def _load_image(self):
-        file_path = filedialog.askopenfilename(
-            filetypes=[("Image files", "*.jpg *.jpeg *.png *.bmp *.gif"), ("All files", "*.*")]
-        )
-        if not file_path:
-            return
-            
-        try:
-            print(f"Loading image from: {file_path}")
-            self.image_source = Image.open(file_path)
-            print(f"Image loaded: {self.image_source.width}x{self.image_source.height}")
-            self.status.set(f"Image loaded: {file_path}")
-            self._update_preview()
-        except Exception as e:
-            print(f"Error loading image: {str(e)}")
-            messagebox.showerror("Error", f"Failed to open image: {str(e)}")
-            import traceback
-            traceback.print_exc()
-
-    def _take_photo(self):
-        try:
-            # This would normally use a camera library
-            # For now, we'll simulate with a file dialog
-            messagebox.showinfo("Camera Simulation", 
-                                "Since we can't access your camera directly in this implementation, "
-                                "please select an image file that will act as if it came from your camera.")
-            self._load_image()
-        except Exception as e:
-            messagebox.showerror("Error", f"Failed to take photo: {str(e)}")
-
-    def _update_preview(self, *args):
-        if not self.image_source:
-            return
-            
-        try:
-            # Process the image based on current settings
-            img = self.image_source.copy()
-            
-            # Print debug info
-            print(f"Updating preview with threshold: {self.threshold_var.get()}, edge sensitivity: {self.edge_sensitivity.get()}")
-            
-            # Resize for preview
-            preview_width = 300
-            ratio = preview_width / img.width
-            preview_height = int(img.height * ratio)
-            img = img.resize((preview_width, preview_height), Image.LANCZOS)
-            
-            # Process based on current settings
-            if self.edge_sensitivity.get() > 0:
-                # Edge detection
-                img = img.convert("L")
-                img = img.filter(ImageFilter.FIND_EDGES)
-                img = img.point(lambda x: 255 if x > self.edge_sensitivity.get() else 0)
-                print("Applied edge detection")
-            else:
-                # Simple threshold
-                img = img.convert("L")
-                img = img.point(lambda x: 255 if x > self.threshold_var.get() else 0)
-                print("Applied threshold")
-            
-            self.processed_image = img
-            print(f"Processed image size: {img.width}x{img.height}")
-            
-            # Display the preview
-            try:
-                img_tk = ImageTk.PhotoImage(img)
-                self.preview_canvas.config(width=img.width, height=img.height)
-                self.preview_canvas.create_image(0, 0, anchor=tk.NW, image=img_tk)
-                self.preview_canvas.image = img_tk  # Keep a reference
-                print("Preview updated successfully")
-            except NameError:
-                # If ImageTk is not available
-                print("ImageTk not available, skipping preview")
-                self.status.set("Image processed (preview not available)")
-        except Exception as e:
-            print(f"Error updating preview: {str(e)}")
-            self.status.set(f"Error updating preview: {str(e)}")
-            import traceback
-            traceback.print_exc()
-
-    def _convert_to_maze(self):
-        if not self.processed_image:
-            messagebox.showwarning("No Image", "Please load an image first")
-            return
-            
-        try:
-            # Resize the processed image to match our maze dimensions
-            img = self.processed_image.resize((self.C, self.R), Image.LANCZOS)
-            img_data = np.array(img)
-            
-            # Reset walls
-            self.hw = [[0] * self.C for _ in range(self.R + 1)]
-            self.vw = [[0] * (self.C + 1) for _ in range(self.R)]
-            
-            # Debug info
-            print(f"Image shape: {img_data.shape}")
-            print(f"Converting image to maze of size {self.R}x{self.C}")
-            
-            threshold = self.threshold_var.get()
-            print(f"Using threshold: {threshold}")
-            
-            # Set horizontal walls
-            for r in range(self.R + 1):
-                for c in range(self.C):
-                    # Check pixels above and below the wall
-                    r_above = max(0, min(r-1, self.R-1))
-                    r_below = min(r, self.R-1)
-                    
-                    # Border walls are always present
-                    if r == 0 or r == self.R:
-                        self.hw[r][c] = 1
-                    # Interior walls based on image intensity difference
-                    elif abs(int(img_data[r_above, c]) - int(img_data[r_below, c])) > threshold//2:
-                        self.hw[r][c] = 1
-            
-            # Set vertical walls
-            for r in range(self.R):
-                for c in range(self.C + 1):
-                    # Check pixels to left and right of the wall
-                    c_left = max(0, min(c-1, self.C-1))
-                    c_right = min(c, self.C-1)
-                    
-                    # Border walls are always present
-                    if c == 0 or c == self.C:
-                        self.vw[r][c] = 1
-                    # Interior walls based on image intensity difference
-                    elif abs(int(img_data[r, c_left]) - int(img_data[r, c_right])) > threshold//2:
-                        self.vw[r][c] = 1
-            
-            # Clear start and end points
-            self.start = self.end = None
-            
-            self.status.set("Image successfully converted to maze")
-            self._draw()
-            
-        except Exception as e:
-            print(f"Error converting image to maze: {str(e)}")
-            messagebox.showerror("Conversion Error", f"Failed to convert image: {str(e)}")
-            import traceback
-            traceback.print_exc()
 
     def _draw(self, path=None):
         self.canvas.delete("all")
@@ -336,8 +346,8 @@ class MazeSolverGUI:
 
         if mode in ("start", "end"):
             if 0 <= r < self.R and 0 <= c < self.C:
-                setattr(self, mode, (r,c))
-                self.status.set(f"{mode.capitalize()} = {(r,c)}")
+                setattr(self, mode, (r, c))
+                self.status.set(f"{mode.capitalize()} = {(r, c)}")
             self._draw()
             return
 
@@ -347,13 +357,16 @@ class MazeSolverGUI:
         th = 6
         if 0 <= r <= self.R and 0 <= c < self.C and abs(cell_y) <= th:
             self.hw[r][c] ^= 1
+            self.status.set(f"Toggled horizontal wall at row {r}, column {c}")
         elif 0 <= r < self.R and 0 <= c < self.C and abs(cell_y-self.SW) <= th:
             self.hw[r+1][c] ^= 1
+            self.status.set(f"Toggled horizontal wall at row {r+1}, column {c}")
         elif 0 <= r < self.R and 0 <= c <= self.C and abs(cell_x) <= th:
             self.vw[r][c] ^= 1
+            self.status.set(f"Toggled vertical wall at row {r}, column {c}")
         elif 0 <= r < self.R and 0 <= c < self.C and abs(cell_x-self.SW) <= th:
             self.vw[r][c+1] ^= 1
-        self.status.set(f"Toggled wall at {(r,c)}")
+            self.status.set(f"Toggled vertical wall at row {r}, column {c+1}")
         self._draw()
 
     def can_move(self, r, c, dr, dc):
@@ -392,7 +405,7 @@ class MazeSolverGUI:
         self.vw = [[0]*(self.C+1) for _ in range(self.R)]
         self._set_border_walls()
         self.start = self.end = None
-        self.status.set("Cleared")
+        self.status.set("Maze cleared")
         self._draw()
 
     def _export_path(self):
@@ -429,15 +442,34 @@ class MazeSolverGUI:
     def _export_image(self):
         # Ask for filename
         file = filedialog.asksaveasfilename(defaultextension='.png', 
-                                           filetypes=[('PNG','*.png'), ('JPEG','*.jpg')])
+                                           filetypes=[('PNG','*.png'), ('PostScript','*.ps')])
         if not file: return
         
-        # Get postscript from canvas
-        ps = self.canvas.postscript(colormode='color')
-        # Convert using PIL
-        img = Image.open(io.BytesIO(ps.encode('utf-8')))
-        img.save(file)
-        messagebox.showinfo("Image Saved", f"Maze image saved to {file}")
+        try:
+            # If it's a .ps file, just save the canvas directly
+            if file.lower().endswith('.ps'):
+                self.canvas.postscript(file=file)
+                messagebox.showinfo("Image Saved", f"Maze image saved to {file}")
+                return
+            
+            # For other formats, try to use PIL if available
+            try:
+                from PIL import Image
+                # Get postscript from canvas
+                ps = self.canvas.postscript(colormode='color')
+                # Convert using PIL
+                img = Image.open(io.BytesIO(ps.encode('utf-8')))
+                img.save(file)
+                messagebox.showinfo("Image Saved", f"Maze image saved to {file}")
+            except ImportError:
+                # If PIL is not available, save as PostScript and inform user
+                ps_file = file.rsplit('.', 1)[0] + '.ps'
+                self.canvas.postscript(file=ps_file)
+                messagebox.showinfo("Image Saved", 
+                                   f"PIL not available. Saved as PostScript to {ps_file}")
+        except Exception as e:
+            print(f"Error saving image: {str(e)}")
+            messagebox.showerror("Error", f"Failed to save image: {str(e)}")
 
 if __name__ == "__main__":
     root = tk.Tk()
