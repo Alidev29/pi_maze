@@ -764,7 +764,7 @@ class MazeSolverGUI:
             self.log_text.delete(1.0, 2.0)
 
 # Run the application
-if _name_ == "_main_":
+if __name__ == "__main__":
     root = tk.Tk()
     app = MazeSolverGUI(root)
     root.mainloop()
