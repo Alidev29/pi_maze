@@ -23,10 +23,7 @@ class MazeSolverGUI:
         self.monitor_thread = None
         
         # Arduino feedback data
-        self.sensor_data = {
-            'front': 0, 'right': 0, 'left': 0, 'back': 0,
-            'ir1': 0, 'ir2': 0, 'ir3': 0, 'ir4': 0
-        }
+      
         self.current_step = 0
         self.execution_status = "Not started"
         
@@ -217,26 +214,6 @@ class MazeSolverGUI:
         tk.Label(us_frame, textvariable=self.left_dist).grid(row=2, column=1, sticky=tk.W)
         tk.Label(us_frame, textvariable=self.back_dist).grid(row=2, column=3, sticky=tk.W)
         
-        # IR sensors
-        ir_frame = tk.Frame(sensor_frame)
-        ir_frame.pack(fill=tk.X, pady=5)
-        
-        tk.Label(ir_frame, text="IR Sensors:").grid(row=0, column=0, sticky=tk.W, columnspan=4)
-        
-        self.ir1_val = StringVar(value="0")
-        self.ir2_val = StringVar(value="0")
-        self.ir3_val = StringVar(value="0")
-        self.ir4_val = StringVar(value="0")
-        
-        tk.Label(ir_frame, text="IR1:").grid(row=1, column=0, sticky=tk.W)
-        tk.Label(ir_frame, textvariable=self.ir1_val).grid(row=1, column=1, sticky=tk.W)
-        tk.Label(ir_frame, text="IR2:").grid(row=1, column=2, sticky=tk.W)
-        tk.Label(ir_frame, textvariable=self.ir2_val).grid(row=1, column=3, sticky=tk.W)
-        
-        tk.Label(ir_frame, text="IR3:").grid(row=2, column=0, sticky=tk.W)
-        tk.Label(ir_frame, textvariable=self.ir3_val).grid(row=2, column=1, sticky=tk.W)
-        tk.Label(ir_frame, text="IR4:").grid(row=2, column=2, sticky=tk.W)
-        tk.Label(ir_frame, textvariable=self.ir4_val).grid(row=2, column=3, sticky=tk.W)
         
         # Execution status
         exec_frame = tk.Frame(sensor_frame)
@@ -572,14 +549,6 @@ class MazeSolverGUI:
                         self.left_dist.set(f"{value} cm")
                     elif sensor == 'back':
                         self.back_dist.set(f"{value} cm")
-                    elif sensor == 'ir1':
-                        self.ir1_val.set(value)
-                    elif sensor == 'ir2':
-                        self.ir2_val.set(value)
-                    elif sensor == 'ir3':
-                        self.ir3_val.set(value)
-                    elif sensor == 'ir4':
-                        self.ir4_val.set(value)
             
             # Process execution status update
             elif data.startswith("STEP:"):
