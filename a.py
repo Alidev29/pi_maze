@@ -14,744 +14,725 @@ class MazeSolverGUI:
     def __init__(self, master):
         self.master = master
         master.title("Maze Solver with Arduino Control")
-        master.geometry("1200x750")
+        master.geometry("1200x700")
         
+        # Serial communication variables
         self.serial_port = None
         self.is_connected = False
         self.stop_monitor_thread = threading.Event()
         self.monitor_thread = None
         
+        # Arduino feedback data
+      
         self.current_step = 0
         self.execution_status = "Not started"
         
-        self.car_orientation_for_path_gen = 0 
-        
-        self.orientation_commands = {
-            0: {0: '', 1: 'L', 2: 'LL', 3: 'R'},
-            1: {0: 'R', 1: '', 2: 'L', 3: 'LL'},
-            2: {0: 'LL', 1: 'R', 2: '', 3: 'L'},
-            3: {0: 'L', 1: 'LL', 2: 'R', 3: ''}
+        # Path conversion (from cells to movement commands)
+        self.direction_map = {
+            (1, 0): 'F',  # Down = Forward
+            (-1, 0): 'B', # Up = Backward
+            (0, 1): 'R',  # Right = Right
+            (0, -1): 'L'  # Left = Left
         }
         
+        # Car's current orientation (0=North, 1=East, 2=South, 3=West)
+        self.car_orientation = 0
+        
+        # Motion sequence (relative to car's current orientation)
+        self.orientation_commands = {
+            # target_orientation: (current_orientation: command)
+            0: {0: '', 1: 'L', 2: 'BB', 3: 'R'},  # Face North
+            1: {0: 'R', 1: '', 2: 'L', 3: 'BB'},  # Face East
+            2: {0: 'BB', 1: 'R', 2: '', 3: 'L'},  # Face South
+            3: {0: 'L', 1: 'BB', 2: 'R', 3: ''}   # Face West
+        }
+        
+        # For path execution
         self.path = []
-        self.movement_commands = ""
-        self.movement_commands_detailed_str = ""
-        self.gui_path_confirmed_by_arduino = False # NEW: Tracks if current GUI path is on Arduino
-
-        self.R = 0 
-        self.C = 0
-        self.hw = []
-        self.vw = []
-        self.start = None
-        self.end = None
-        self.car_location = None
-        self.sensor_data = {}
-
+        self.movement_commands = []
+        
         self.create_new_maze()
-        self.master.protocol("WM_DELETE_WINDOW", self._on_closing)
 
     def create_new_maze(self):
-        if self.R == 0 or self.C == 0 or (hasattr(self, 'main_frame') and self.main_frame.winfo_exists()):
-            if hasattr(self, 'main_frame') and self.main_frame.winfo_exists():
-                new_R = simpledialog.askinteger("Rows", "Enter number of rows:", parent=self.master, minvalue=1, maxvalue=50, initialvalue=self.R or 5)
-                new_C = simpledialog.askinteger("Columns", "Enter number of columns:", parent=self.master, minvalue=1, maxvalue=50, initialvalue=self.C or 5)
-                if not new_R or not new_C:
-                    if self.R == 0 or self.C == 0:
-                        messagebox.showerror("Error", "Valid maze size required to start.")
-                        self.master.destroy()
-                        return
-                else:
-                    self.R, self.C = new_R, new_C
-            else: 
-                self.R = simpledialog.askinteger("Rows", "Enter number of rows:", parent=self.master, minvalue=1, maxvalue=50, initialvalue=5)
-                self.C = simpledialog.askinteger("Columns", "Enter number of columns:", parent=self.master, minvalue=1, maxvalue=50, initialvalue=5)
-                if not self.R or not self.C:
-                    messagebox.showerror("Error", "Invalid maze size. Exiting.")
-                    self.master.destroy()
-                    return
-        
+        # Prompt for maze dimensions
+        self.R = simpledialog.askinteger("Rows", "Enter number of rows:", parent=self.master, minvalue=1, maxvalue=50)
+        self.C = simpledialog.askinteger("Columns", "Enter number of columns:", parent=self.master, minvalue=1, maxvalue=50)
+        if not self.R or not self.C:
+            messagebox.showerror("Error", "Invalid maze size. Exiting.")
+            self.master.destroy()
+            return
+
+        # Compute canvas and cell size
         canvas_size = 500
-        self.SW = canvas_size // max(self.C, self.R, 1)
+        self.SW = canvas_size // max(self.C, self.R)
         self.canvas_width = self.C * self.SW
         self.canvas_height = self.R * self.SW
 
+        # Wall arrays (1=wall)
         self.hw = [[0] * self.C for _ in range(self.R + 1)]
         self.vw = [[0] * (self.C + 1) for _ in range(self.R)]
         self._set_border_walls()
 
         self.start = self.end = None
-        self.car_location = None
-        self.path = []
-        self.movement_commands = ""
-        self.movement_commands_detailed_str = ""
-        self.gui_path_confirmed_by_arduino = False # Reset flag
-        self.sensor_data = {}
+        self.mode = StringVar(master=self.master, value="wall")
+        self.car_location = None  # Current car location in maze coordinates
 
-        if hasattr(self, 'mode'):
-            self.mode.set("wall")
-        else:
-            self.mode = StringVar(value="wall")
+        # Remove old widgets if they exist
+        for widget in self.master.winfo_children():
+            widget.destroy()
 
-        if hasattr(self, 'main_frame') and self.main_frame.winfo_exists():
-            for widget in self.main_frame.winfo_children():
-                widget.destroy()
-            self.main_frame.destroy()
-        
         self._build_ui()
-        self.canvas.config(width=self.canvas_width, height=self.canvas_height)
         self._draw()
-        self._update_button_states() # Update buttons after UI is built/rebuilt
 
     def _set_border_walls(self):
-        if not self.R or not self.C: return # Guard against uninitialized R/C
-        for c_idx in range(self.C):
-            self.hw[0][c_idx] = self.hw[self.R][c_idx] = 1
-        for r_idx in range(self.R):
-            self.vw[r_idx][0] = self.vw[r_idx][self.C] = 1
+        for c in range(self.C):
+            self.hw[0][c] = self.hw[self.R][c] = 1
+        for r in range(self.R):
+            self.vw[r][0] = self.vw[r][self.C] = 1
 
     def _build_ui(self):
+        # Main container with 3 frames
         self.main_frame = tk.Frame(self.master)
         self.main_frame.pack(fill=tk.BOTH, expand=True)
         
+        # Left frame for canvas
         self.left_frame = tk.Frame(self.main_frame)
         self.left_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=10, pady=10)
         
-        self.canvas = tk.Canvas(self.left_frame, width=self.canvas_width, height=self.canvas_height, bg="ivory")
+        # Canvas for maze
+        self.canvas = tk.Canvas(self.left_frame, width=self.canvas_width, height=self.canvas_height, bg="white")
         self.canvas.pack(expand=True)
         self.canvas.bind("<Button-1>", self._on_click)
         
+        # Middle frame for controls
         self.middle_frame = tk.Frame(self.main_frame)
         self.middle_frame.pack(side=tk.LEFT, fill=tk.Y, padx=10, pady=10)
         
+        # Right frame for Arduino feedback
         self.right_frame = tk.Frame(self.main_frame)
         self.right_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=10, pady=10)
         
+        # Middle frame contents (maze controls)
         tk.Label(self.middle_frame, text="Mode:").pack(anchor=tk.W)
         for val, txt in [("wall", "Toggle Walls"), ("start", "Start"), ("end", "End")]:
             tk.Radiobutton(self.middle_frame, text=txt, variable=self.mode, value=val).pack(anchor=tk.W)
 
+        # Main buttons
         tk.Button(self.middle_frame, text="Solve", command=self.solve).pack(fill=tk.X, pady=5)
-        tk.Button(self.middle_frame, text="Clear Maze", command=self._reset).pack(fill=tk.X, pady=5)
+        tk.Button(self.middle_frame, text="Clear", command=self._reset).pack(fill=tk.X, pady=5)
         
-        file_frame = tk.LabelFrame(self.middle_frame, text="File")
+        # File operations section
+        file_frame = tk.LabelFrame(self.middle_frame, text="File Operations")
         file_frame.pack(fill=tk.X, pady=10)
-        tk.Button(file_frame, text="New Maze", command=self.create_new_maze).pack(fill=tk.X, pady=3)
+        
         tk.Button(file_frame, text="Save Maze", command=self._save_maze).pack(fill=tk.X, pady=3)
         tk.Button(file_frame, text="Load Maze", command=self._load_maze).pack(fill=tk.X, pady=3)
+        tk.Button(file_frame, text="New Maze", command=self.create_new_maze).pack(fill=tk.X, pady=3)
         
+        # Export buttons
         export_frame = tk.LabelFrame(self.middle_frame, text="Export")
         export_frame.pack(fill=tk.X, pady=10)
-        tk.Button(export_frame, text="Export Path Cmds", command=self._export_path).pack(fill=tk.X, pady=3)
-        tk.Button(export_frame, text="Save Maze Image", command=self._export_image).pack(fill=tk.X, pady=3)
-
-        self.status = StringVar(value="Set start/end or toggle walls.")
-        tk.Label(self.middle_frame, textvariable=self.status, wraplength=180, fg="blue").pack(pady=10)
         
+        tk.Button(export_frame, text="Export Path", command=self._export_path).pack(fill=tk.X, pady=3)
+        tk.Button(export_frame, text="Save Image", command=self._export_image).pack(fill=tk.X, pady=3)
+
+        self.status = StringVar(master=self.master, value="Click to set start/end or toggle walls")
+        tk.Label(self.middle_frame, textvariable=self.status, wraplength=150, fg="blue").pack(pady=10)
+        
+        # Right frame contents (Arduino control)
         arduino_frame = tk.LabelFrame(self.right_frame, text="Arduino Communication")
         arduino_frame.pack(fill=tk.X, pady=5)
         
+        # Serial port selection
         port_frame = tk.Frame(arduino_frame)
         port_frame.pack(fill=tk.X, pady=5)
+        
         tk.Label(port_frame, text="Port:").pack(side=tk.LEFT)
         self.port_var = StringVar()
-        self.port_combo = ttk.Combobox(port_frame, textvariable=self.port_var, width=15)
+        self.port_combo = ttk.Combobox(port_frame, textvariable=self.port_var)
         self.port_combo.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
-        tk.Button(port_frame, text="Refresh", command=self._refresh_ports).pack(side=tk.RIGHT)
-        self._refresh_ports()
         
+        # Get available ports
+        ports = [port.device for port in serial.tools.list_ports.comports()]
+        self.port_combo['values'] = ports
+        if ports:
+            self.port_combo.current(0)
+            
+        tk.Button(port_frame, text="Refresh", command=self._refresh_ports).pack(side=tk.RIGHT)
+        
+        # Connect/Disconnect button
         self.connect_button = tk.Button(arduino_frame, text="Connect", command=self._toggle_connection)
         self.connect_button.pack(fill=tk.X, pady=5)
         
+        # Car control
         control_frame = tk.LabelFrame(self.right_frame, text="Car Control")
         control_frame.pack(fill=tk.X, pady=10)
         
+        # Send path button
         self.send_path_button = tk.Button(control_frame, text="Send Path to Car", command=self._send_path_to_car, state=tk.DISABLED)
         self.send_path_button.pack(fill=tk.X, pady=5)
+        
+        # Execute path button
         self.execute_path_button = tk.Button(control_frame, text="Execute Path", command=self._execute_path, state=tk.DISABLED)
         self.execute_path_button.pack(fill=tk.X, pady=5)
+        
+        # Stop execution button
         self.stop_button = tk.Button(control_frame, text="Stop Execution", command=self._stop_execution, state=tk.DISABLED)
         self.stop_button.pack(fill=tk.X, pady=5)
         
-        test_frame = tk.LabelFrame(control_frame, text="Test Movements")
+        # Test movement buttons
+        test_frame = tk.Frame(control_frame)
         test_frame.pack(fill=tk.X, pady=5)
-        self.test_buttons = {}
-        for cmd_char in ('F', 'B', 'L', 'R', 'S'):
-            btn = tk.Button(test_frame, text=cmd_char, command=lambda c=cmd_char: self._send_test_command(c), width=3, state=tk.DISABLED)
-            btn.pack(side=tk.LEFT, padx=2, pady=2)
-            self.test_buttons[cmd_char] = btn
         
-        sensor_frame = tk.LabelFrame(self.right_frame, text="Sensor Data & Status")
+        tk.Button(test_frame, text="F", command=lambda: self._send_test_command('F'), width=3).pack(side=tk.LEFT, padx=2)
+        tk.Button(test_frame, text="B", command=lambda: self._send_test_command('B'), width=3).pack(side=tk.LEFT, padx=2)
+        tk.Button(test_frame, text="L", command=lambda: self._send_test_command('L'), width=3).pack(side=tk.LEFT, padx=2)
+        tk.Button(test_frame, text="R", command=lambda: self._send_test_command('R'), width=3).pack(side=tk.LEFT, padx=2)
+        tk.Button(test_frame, text="S", command=lambda: self._send_test_command('S'), width=3).pack(side=tk.LEFT, padx=2)
+        
+        # Sensor data display
+        sensor_frame = tk.LabelFrame(self.right_frame, text="Sensor Data")
         sensor_frame.pack(fill=tk.BOTH, expand=True, pady=10)
         
+        # Ultrasonic sensors
         us_frame = tk.Frame(sensor_frame)
         us_frame.pack(fill=tk.X, pady=5)
-        tk.Label(us_frame, text="Ultrasonic:").grid(row=0, column=0, columnspan=4, sticky=tk.W)
-        self.front_dist = StringVar(value="F: --- cm")
-        self.right_dist = StringVar(value="R: --- cm")
-        self.left_dist = StringVar(value="L: --- cm")
-        self.back_dist = StringVar(value="B: --- cm")
-        tk.Label(us_frame, textvariable=self.front_dist, width=10).grid(row=1, column=0, sticky=tk.W)
-        tk.Label(us_frame, textvariable=self.left_dist, width=10).grid(row=1, column=1, sticky=tk.W)
-        tk.Label(us_frame, textvariable=self.right_dist, width=10).grid(row=1, column=2, sticky=tk.W)
-        tk.Label(us_frame, textvariable=self.back_dist, width=10).grid(row=1, column=3, sticky=tk.W)
         
+        tk.Label(us_frame, text="Ultrasonic:").grid(row=0, column=0, sticky=tk.W)
+        tk.Label(us_frame, text="Front:").grid(row=1, column=0, sticky=tk.W)
+        tk.Label(us_frame, text="Right:").grid(row=1, column=2, sticky=tk.W)
+        tk.Label(us_frame, text="Left:").grid(row=2, column=0, sticky=tk.W)
+        tk.Label(us_frame, text="Back:").grid(row=2, column=2, sticky=tk.W)
+        
+        self.front_dist = StringVar(value="0 cm")
+        self.right_dist = StringVar(value="0 cm")
+        self.left_dist = StringVar(value="0 cm")
+        self.back_dist = StringVar(value="0 cm")
+        
+        tk.Label(us_frame, textvariable=self.front_dist).grid(row=1, column=1, sticky=tk.W)
+        tk.Label(us_frame, textvariable=self.right_dist).grid(row=1, column=3, sticky=tk.W)
+        tk.Label(us_frame, textvariable=self.left_dist).grid(row=2, column=1, sticky=tk.W)
+        tk.Label(us_frame, textvariable=self.back_dist).grid(row=2, column=3, sticky=tk.W)
+        
+        
+        # Execution status
         exec_frame = tk.Frame(sensor_frame)
         exec_frame.pack(fill=tk.X, pady=5)
+        
+        tk.Label(exec_frame, text="Execution:").grid(row=0, column=0, sticky=tk.W)
         self.step_var = StringVar(value="Step: 0/0")
         self.status_var = StringVar(value="Status: Not started")
-        tk.Label(exec_frame, textvariable=self.step_var).pack(side=tk.LEFT, padx=5)
-        tk.Label(exec_frame, textvariable=self.status_var).pack(side=tk.LEFT, padx=5)
         
+        tk.Label(exec_frame, textvariable=self.step_var).grid(row=1, column=0, sticky=tk.W)
+        tk.Label(exec_frame, textvariable=self.status_var).grid(row=2, column=0, sticky=tk.W)
+        
+        # Log display
         log_frame = tk.LabelFrame(self.right_frame, text="Communication Log")
         log_frame.pack(fill=tk.BOTH, expand=True, pady=5)
-        self.log_text = tk.Text(log_frame, height=8, width=40, wrap=tk.WORD)
-        self.log_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        scrollbar = tk.Scrollbar(log_frame, command=self.log_text.yview)
+        
+        self.log_text = tk.Text(log_frame, height=10, width=40)
+        self.log_text.pack(fill=tk.BOTH, expand=True)
+        
+        # Add scrollbar to log
+        scrollbar = tk.Scrollbar(self.log_text)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         self.log_text.config(yscrollcommand=scrollbar.set)
+        scrollbar.config(command=self.log_text.yview)
 
-    def _draw(self, current_path_to_highlight=None):
-        if not hasattr(self, 'canvas') or not self.canvas.winfo_exists(): return
+    def _draw(self, path=None):
         self.canvas.delete("all")
-        for r_idx in range(self.R):
-            for c_idx in range(self.C):
-                x, y = c_idx*self.SW, r_idx*self.SW
-                fill_color = "ivory"
-                if (r_idx,c_idx) == self.start: fill_color = "pale green"
-                elif (r_idx,c_idx) == self.end: fill_color = "salmon"
-                
-                if current_path_to_highlight and (r_idx,c_idx) in current_path_to_highlight:
-                    if (r_idx,c_idx) != self.start and (r_idx,c_idx) != self.end:
-                        fill_color = "light sky blue"
-                
-                if (r_idx,c_idx) == self.car_location: fill_color = "orange"
-                
-                self.canvas.create_rectangle(x, y, x+self.SW, y+self.SW, fill=fill_color, outline="gray60")
-        
-        for r_idx in range(self.R+1):
-            for c_idx in range(self.C):
-                if self.hw[r_idx][c_idx]:
-                    x1, y1 = c_idx*self.SW, r_idx*self.SW
-                    self.canvas.create_line(x1, y1, x1+self.SW, y1, width=3, fill="black")
-        for r_idx in range(self.R):
-            for c_idx in range(self.C+1):
-                if self.vw[r_idx][c_idx]:
-                    x1, y1 = c_idx*self.SW, r_idx*self.SW
-                    self.canvas.create_line(x1, y1, x1, y1+self.SW, width=3, fill="black")
+        # Cells
+        for r in range(self.R):
+            for c in range(self.C):
+                x, y = c*self.SW, r*self.SW
+                fill = "white"
+                if (r,c) == self.start: fill = "green"
+                elif (r,c) == self.end: fill = "red"
+                elif (r,c) == self.car_location: fill = "orange"
+                elif path and (r,c) in path: fill = "lightblue"
+                self.canvas.create_rectangle(x, y, x+self.SW, y+self.SW, fill=fill, outline="black")
+        # Horizontal walls
+        for r in range(self.R+1):
+            for c in range(self.C):
+                if self.hw[r][c]:
+                    x1, y1 = c*self.SW, r*self.SW
+                    self.canvas.create_line(x1, y1, x1+self.SW, y1, width=4)
+        # Vertical walls
+        for r in range(self.R):
+            for c in range(self.C+1):
+                if self.vw[r][c]:
+                    x1, y1 = c*self.SW, r*self.SW
+                    self.canvas.create_line(x1, y1, x1, y1+self.SW, width=4)
 
     def _on_click(self, ev):
         x, y = ev.x, ev.y
         mode = self.mode.get()
         c, r = x // self.SW, y // self.SW
 
-        if 0 <= r < self.R and 0 <= c < self.C:
-            if mode in ("start", "end"):
+        if mode in ("start", "end"):
+            if 0 <= r < self.R and 0 <= c < self.C:
                 setattr(self, mode, (r,c))
-                self.status.set(f"{mode.capitalize()} set to {(r,c)}")
+                self.status.set(f"{mode.capitalize()} = {(r,c)}")
+                
+                # If setting start, also set as car location
                 if mode == "start":
                     self.car_location = (r, c)
-                self.path = [] 
-                self.movement_commands = ""
-                self.movement_commands_detailed_str = ""
-                self.gui_path_confirmed_by_arduino = False # Path changed
-                self._update_button_states()
-                self._draw(self.path)
-                return
-
-            cell_x_offset = x - c*self.SW
-            cell_y_offset = y - r*self.SW
-            edge_threshold = self.SW * 0.25
-
-            toggled = False
-            if cell_y_offset < edge_threshold and r < self.R :
-                self.hw[r][c] ^= 1; toggled = True
-            elif cell_y_offset > self.SW - edge_threshold and r < self.R:
-                self.hw[r+1][c] ^= 1; toggled = True
-            elif cell_x_offset < edge_threshold and c < self.C:
-                self.vw[r][c] ^= 1; toggled = True
-            elif cell_x_offset > self.SW - edge_threshold and c < self.C:
-                self.vw[r][c+1] ^= 1; toggled = True
-            
-            if toggled:
-                self.status.set(f"Toggled wall near {(r,c)}")
-                self.path = []
-                self.movement_commands = ""
-                self.movement_commands_detailed_str = ""
-                self.gui_path_confirmed_by_arduino = False # Walls changed, path invalid
-                self._update_button_states()
-                self._draw()
-        else:
             self._draw()
+            return
+
+        # Toggle specific wall edges
+        cell_x = x - c*self.SW
+        cell_y = y - r*self.SW
+        th = 6
+        if 0 <= r <= self.R and 0 <= c < self.C and abs(cell_y) <= th:
+            self.hw[r][c] ^= 1
+        elif 0 <= r < self.R and 0 <= c < self.C and abs(cell_y-self.SW) <= th:
+            self.hw[r+1][c] ^= 1
+        elif 0 <= r < self.R and 0 <= c <= self.C and abs(cell_x) <= th:
+            self.vw[r][c] ^= 1
+        elif 0 <= r < self.R and 0 <= c < self.C and abs(cell_x-self.SW) <= th:
+            self.vw[r][c+1] ^= 1
+        self.status.set(f"Toggled wall at {(r,c)}")
+        self._draw()
 
     def can_move(self, r, c, dr, dc):
-        if dr == 1: return not self.hw[r+1][c]
-        if dr == -1: return not self.hw[r][c]
-        if dc == 1: return not self.vw[r][c+1]
-        if dc == -1: return not self.vw[r][c]
+        if dr == 1: return self.hw[r+1][c] == 0
+        if dr == -1: return self.hw[r][c] == 0
+        if dc == 1: return self.vw[r][c+1] == 0
+        if dc == -1: return self.vw[r][c] == 0
         return False
 
     def solve(self):
         if not self.start or not self.end:
-            messagebox.showwarning("Input Missing", "Please set both Start and End points.")
+            messagebox.showwarning("Need start+end", "Please set both start and end")
             return
+        prev = {self.start: None}
+        dq = deque([self.start])
+        while dq:
+            r, c = dq.popleft()
+            if (r,c) == self.end: break
+            for dr, dc in [(1,0),(-1,0),(0,1),(0,-1)]:
+                nr, nc = r+dr, c+dc
+                if 0<=nr<self.R and 0<=nc<self.C and (nr,nc) not in prev and self.can_move(r,c,dr,dc):
+                    prev[(nr,nc)] = (r,c); dq.append((nr,nc))
+        if self.end not in prev:
+            messagebox.showinfo("No path", "Cannot reach end")
+            self.status.set("No path found")
+            return
+        path, cur = [], self.end
+        while cur:
+            path.append(cur); cur = prev[cur]
+        path.reverse()
+        self.path = path  # Store the path for later use
+        self._draw(path)
+        self.status.set(f"Path found ({len(path)} steps)")
         
-        q = deque([(self.start, [self.start])])
-        visited = {self.start}
-        solved_path = []
-
-        while q:
-            (curr_r, curr_c), path_taken = q.popleft()
-            if (curr_r, curr_c) == self.end:
-                solved_path = path_taken
-                break
-            for dr, dc in [(-1,0), (0,1), (1,0), (0,-1)]:
-                nr, nc = curr_r + dr, curr_c + dc
-                if 0 <= nr < self.R and 0 <= nc < self.C and \
-                   (nr, nc) not in visited and self.can_move(curr_r, curr_c, dr, dc):
-                    visited.add((nr, nc))
-                    q.append(((nr, nc), path_taken + [(nr, nc)]))
+        # Generate movement commands
+        self._generate_movement_commands()
         
-        self.gui_path_confirmed_by_arduino = False # New solve, path not confirmed yet
-        if solved_path:
-            self.path = solved_path
-            self.status.set(f"Path found: {len(self.path)-1} moves.")
-            self._generate_movement_commands()
-        else:
-            self.path = []
-            self.movement_commands = ""
-            self.movement_commands_detailed_str = ""
-            self.status.set("No path found to the end point.")
-        
-        self._update_button_states()
-        self._draw(self.path)
+        # Enable sending path to car if connected
+        if self.is_connected:
+            self.send_path_button.config(state=tk.NORMAL)
 
     def _reset(self):
-        self.hw = [[0] * self.C for _ in range(self.R + 1)]
-        self.vw = [[0] * (self.C + 1) for _ in range(self.R)]
+        self.hw = [[0]*self.C for _ in range(self.R+1)]
+        self.vw = [[0]*(self.C+1) for _ in range(self.R)]
         self._set_border_walls()
-        self.start = self.end = self.car_location = None
+        self.start = self.end = None
+        self.car_location = None
         self.path = []
-        self.movement_commands = ""
-        self.movement_commands_detailed_str = ""
-        self.gui_path_confirmed_by_arduino = False # Reset flag
-        self.status.set("Maze cleared. Set start/end or walls.")
-        self.mode.set("wall")
-        self._update_button_states()
-        self.step_var.set("Step: 0/0")
-        self.status_var.set("Status: Not started")
+        self.movement_commands = []
+        self.status.set("Cleared")
         self._draw()
 
-    def get_expected_walls(self, r, c, orientation):
-        front_wall, left_wall, right_wall = 0, 0, 0
-        if orientation == 0: front_wall = 1 if r == 0 or self.hw[r][c] else 0
-        elif orientation == 1: front_wall = 1 if c == self.C - 1 or self.vw[r][c+1] else 0
-        elif orientation == 2: front_wall = 1 if r == self.R - 1 or self.hw[r+1][c] else 0
-        elif orientation == 3: front_wall = 1 if c == 0 or self.vw[r][c] else 0
-
-        if orientation == 0: left_wall = 1 if c == 0 or self.vw[r][c] else 0
-        elif orientation == 1: left_wall = 1 if r == 0 or self.hw[r][c] else 0
-        elif orientation == 2: left_wall = 1 if c == self.C - 1 or self.vw[r][c+1] else 0
-        elif orientation == 3: left_wall = 1 if r == self.R - 1 or self.hw[r+1][c] else 0
-
-        if orientation == 0: right_wall = 1 if c == self.C - 1 or self.vw[r][c+1] else 0
-        elif orientation == 1: right_wall = 1 if r == self.R - 1 or self.hw[r+1][c] else 0
-        elif orientation == 2: right_wall = 1 if c == 0 or self.vw[r][c] else 0
-        elif orientation == 3: right_wall = 1 if r == 0 or self.hw[r][c] else 0
-        return front_wall, left_wall, right_wall
-
-    def _generate_movement_commands(self):
-        if not self.path or len(self.path) < 2:
-            self.movement_commands = ""
-            self.movement_commands_detailed_str = ""
-            self.gui_path_confirmed_by_arduino = False # No path, so not confirmed
+    def _export_path(self):
+        if not self.start or not self.end or not self.path:
+            messagebox.showwarning("No path", "Please solve the maze first")
             return
-
-        self.car_orientation_for_path_gen = 0
-        temp_orientation = self.car_orientation_for_path_gen
-        
-        detailed_segments = []
-        simple_cmds_list = []
-
-        for i in range(len(self.path) - 1):
-            current_r, current_c = self.path[i]
-            next_r, next_c = self.path[i+1]
-
-            dr, dc = next_r - current_r, next_c - current_c
             
-            target_move_orientation = -1
-            if (dr, dc) == (-1, 0): target_move_orientation = 0
-            elif (dr, dc) == (0, 1): target_move_orientation = 1
-            elif (dr, dc) == (1, 0): target_move_orientation = 2
-            elif (dr, dc) == (0, -1): target_move_orientation = 3
-
-            if target_move_orientation != -1:
-                turn_sequence = self.orientation_commands[target_move_orientation][temp_orientation]
+        file_path = filedialog.asksaveasfilename(
+            defaultextension=".txt",
+            filetypes=[("Text files", ".txt"), ("All files", ".*")]
+        )
+        if not file_path:
+            return
+            
+        # Generate movement commands if they don't exist
+        if not self.movement_commands:
+            self._generate_movement_commands()
+            
+        try:
+            with open(file_path, 'w') as f:
+                # Write path cells
+                f.write("Path (row, col):\n")
+                for r, c in self.path:
+                    f.write(f"({r}, {c})\n")
+                    
+                # Write movement commands
+                f.write("\nMovement Commands:\n")
+                f.write(''.join(self.movement_commands))
                 
-                for turn_char in turn_sequence:
-                    simple_cmds_list.append(turn_char)
-                    if turn_char == 'L': temp_orientation = (temp_orientation + 3) % 4
-                    elif turn_char == 'R': temp_orientation = (temp_orientation + 1) % 4
-                    ef, el, er = self.get_expected_walls(current_r, current_c, temp_orientation)
-                    detailed_segments.append(f"{turn_char},{ef},{el},{er}")
+            self.status.set(f"Path exported to {file_path}")
+        except Exception as e:
+            messagebox.showerror("Export error", str(e))
 
-                simple_cmds_list.append('F')
-                ef, el, er = self.get_expected_walls(next_r, next_c, temp_orientation)
-                detailed_segments.append(f"F,{ef},{el},{er}")
-            else:
-                self._log(f"ERR: Path gen, unknown move from ({current_r},{current_c}) to ({next_r},{next_c})")
+    def _save_maze(self):
+        file_path = filedialog.asksaveasfilename(
+            defaultextension=".json",
+            filetypes=[("JSON files", ".json"), ("All files", ".*")]
+        )
+        if not file_path:
+            return
+            
+        maze_data = {
+            'rows': self.R,
+            'cols': self.C,
+            'horizontal_walls': self.hw,
+            'vertical_walls': self.vw,
+            'start': self.start,
+            'end': self.end
+        }
         
-        self.movement_commands = "".join(simple_cmds_list)
-        self.movement_commands_detailed_str = ";".join(detailed_segments)
-        if self.movement_commands_detailed_str:
-            self.movement_commands_detailed_str += ";"
-        
-        self.gui_path_confirmed_by_arduino = False # New commands generated, not yet confirmed by Arduino
-        self._log(f"Path cmds: {self.movement_commands}")
-        return self.movement_commands_detailed_str
+        try:
+            with open(file_path, 'w') as f:
+                json.dump(maze_data, f)
+            self.status.set(f"Maze saved to {file_path}")
+        except Exception as e:
+            messagebox.showerror("Save error", str(e))
 
-    def _send_path_to_car(self):
-        if not self._check_connection("Send Path"): return
-        if not self.movement_commands_detailed_str:
-            messagebox.showwarning("No Path", "No path commands generated. Solve the maze first.")
+    def _load_maze(self):
+        file_path = filedialog.askopenfilename(
+            filetypes=[("JSON files", ".json"), ("All files", ".*")]
+        )
+        if not file_path:
             return
             
         try:
-            cmd_to_send = f"PATH:{self.movement_commands_detailed_str}\n"
-            if len(cmd_to_send) > 250:
-                 self._log(f"WARN: Path string length {len(cmd_to_send)} may exceed Arduino buffer.")
-                 if not messagebox.askyesno("Path Too Long", f"Path command string is very long ({len(cmd_to_send)} chars).\nArduino might not receive it all.\n\nContinue anyway?"):
-                    return
-
-            self.serial_port.write(cmd_to_send.encode('utf-8'))
-            self._log(f"→ PATH sent ({self.movement_commands_detailed_str.count(';')} segments)")
+            with open(file_path, 'r') as f:
+                maze_data = json.load(f)
+                
+            self.R = maze_data['rows']
+            self.C = maze_data['cols']
+            self.hw = maze_data['horizontal_walls']
+            self.vw = maze_data['vertical_walls']
+            self.start = tuple(maze_data['start']) if maze_data['start'] else None
+            self.end = tuple(maze_data['end']) if maze_data['end'] else None
             
-            self.current_step = 0
-            num_segments = self.movement_commands_detailed_str.count(';')
-            self.step_var.set(f"Step: 0/{num_segments}")
-            # Don't set gui_path_confirmed_by_arduino to True here yet.
-            # Wait for "STATUS:Path received" from Arduino.
-            # _update_button_states will be called by _process_feedback then.
-            # For immediate feedback, we can assume it will be confirmed, but safer to wait.
-            # Let's call it with path_just_sent_successfully=True to disable Send and enable Execute if all good.
-            self._update_button_states(path_just_sent_successfully=True) # Crucial fix here
+            # Update car location to start
+            self.car_location = self.start
             
+            # Recompute canvas dimensions
+            canvas_size = 500
+            self.SW = canvas_size // max(self.C, self.R)
+            self.canvas_width = self.C * self.SW
+            self.canvas_height = self.R * self.SW
+            
+            # Update canvas size
+            self.canvas.config(width=self.canvas_width, height=self.canvas_height)
+            
+            self._draw()
+            self.status.set(f"Maze loaded from {file_path}")
         except Exception as e:
-            self._log(f"ERR: Sending path: {str(e)}")
-            messagebox.showerror("Send Error", str(e))
+            messagebox.showerror("Load error", str(e))
 
-    def _execute_path(self):
-        if not self._check_connection("Execute Path"): return
+    def _export_image(self):
+        file_path = filedialog.asksaveasfilename(
+            defaultextension=".png",
+            filetypes=[("PNG files", ".png"), ("All files", ".*")]
+        )
+        if not file_path:
+            return
+            
         try:
-            self.serial_port.write(b"EXEC\n")
-            self._log("→ EXEC command sent")
-            self.execution_status = "Executing..." # Tentative status
-            self._update_button_states() # Update based on new status
-            self.status_var.set("Status: Executing...")
-            if self.start: self.car_location = self.start
-            self._draw(self.path)
+            # Create a temporary PostScript file
+            ps_data = self.canvas.postscript(colormode='color')
+            
+            # Convert PostScript to image using PIL
+            img = Image.open(io.BytesIO(ps_data.encode('utf-8')))
+            img.save(file_path)
+            
+            self.status.set(f"Image saved to {file_path}")
         except Exception as e:
-            self._log(f"ERR: Executing path: {str(e)}")
-            messagebox.showerror("Execute Error", str(e))
+            messagebox.showerror("Export error", str(e))
 
-    def _stop_execution(self):
-        if not self._check_connection("Stop Execution", silent=True): return
-        try:
-            self.serial_port.write(b"STOP\n")
-            self._log("→ STOP command sent")
-        except Exception as e:
-            self._log(f"ERR: Stopping execution: {str(e)}")
-
-    def _send_test_command(self, command_char):
-        if not self._check_connection(f"Test {command_char}"): return
-        try:
-            cmd_to_send = f"CMD:{command_char}\n"
-            self.serial_port.write(cmd_to_send.encode('utf-8'))
-            self._log(f"→ {cmd_to_send.strip()}")
-        except Exception as e:
-            self._log(f"ERR: Sending test cmd '{command_char}': {str(e)}")
+    def _refresh_ports(self):
+        ports = [port.device for port in serial.tools.list_ports.comports()]
+        self.port_combo['values'] = ports
+        if ports:
+            self.port_combo.current(0)
 
     def _toggle_connection(self):
         if not self.is_connected:
             port = self.port_var.get()
             if not port:
-                messagebox.showwarning("No Port", "Please select a serial port.")
+                messagebox.showwarning("No Port", "Please select a serial port")
                 return
+                
             try:
+                # Connect to Arduino with a 115200 baud rate
                 self.serial_port = serial.Serial(port, 115200, timeout=1)
-                self._log(f"Attempting connection to {port}...")
-                time.sleep(2)
+                time.sleep(2)  # Wait for Arduino to reset
                 
-                init_msg = ""
-                if self.serial_port.in_waiting > 0:
-                    init_msg = self.serial_port.readline().decode('utf-8', errors='replace').strip()
+                self.is_connected = True
+                self.connect_button.config(text="Disconnect")
+                self.status.set(f"Connected to {port}")
+                self._log(f"Connected to {port}")
                 
-                if "Arduino Maze Solver Car initialized" in init_msg:
-                    self._log(f"← {init_msg}")
-                    self.is_connected = True
-                    self.connect_button.config(text="Disconnect")
-                    self.status.set(f"Connected to {port}")
-                    self._log(f"Successfully connected to {port}")
-                    
-                    self.stop_monitor_thread.clear()
-                    self.monitor_thread = threading.Thread(target=self._monitor_serial, daemon=True)
-                    self.monitor_thread.start()
-                else:
-                    self._log(f"ERR: Arduino init message not received or incorrect. Got: '{init_msg}'")
-                    if self.serial_port and self.serial_port.is_open: self.serial_port.close()
-                    self.serial_port = None
-                    messagebox.showerror("Connection Failed", "Arduino did not initialize correctly. Check sketch and port.")
-            except serial.SerialException as e:
-                self._log(f"ERR: SerialException on connect: {str(e)}")
-                messagebox.showerror("Connection Error", f"Could not open port {port}: {str(e)}")
-                self.serial_port = None
+                # Start monitoring thread
+                self.stop_monitor_thread.clear()
+                self.monitor_thread = threading.Thread(target=self._monitor_serial)
+                self.monitor_thread.daemon = True
+                self.monitor_thread.start()
+                
+                # Enable control buttons if path exists
+                if self.path:
+                    self.send_path_button.config(state=tk.NORMAL)
+                
+                # Enable test buttons
+                for child in self.master.winfo_children():
+                    if isinstance(child, tk.Button) and child.cget('text') in ('F', 'B', 'L', 'R', 'S'):
+                        child.config(state=tk.NORMAL)
+                
             except Exception as e:
-                self._log(f"ERR: Unexpected connect error: {str(e)}")
-                messagebox.showerror("Connection Error", f"An unexpected error occurred: {str(e)}")
-                if self.serial_port and self.serial_port.is_open: self.serial_port.close()
-                self.serial_port = None
-        else: 
+                messagebox.showerror("Connection Error", str(e))
+                self._log(f"Error: {str(e)}")
+        else:
+            # Disconnect
             self.stop_monitor_thread.set()
-            if self.monitor_thread and self.monitor_thread.is_alive():
+            if self.monitor_thread:
                 self.monitor_thread.join(timeout=1)
+            
             if self.serial_port and self.serial_port.is_open:
-                try:
-                    if self.execution_status.lower().startswith("executing"):
-                         self.serial_port.write(b"STOP\n")
-                         self._log("→ Sent STOP on disconnect.")
-                    self.serial_port.close()
-                except Exception as e:
-                    self._log(f"ERR: Closing serial port: {e}")
+                self.serial_port.close()
+            
             self.is_connected = False
-            self.serial_port = None
             self.connect_button.config(text="Connect")
+            self.send_path_button.config(state=tk.DISABLED)
+            self.execute_path_button.config(state=tk.DISABLED)
+            self.stop_button.config(state=tk.DISABLED)
             self.status.set("Disconnected")
-            self._log("Disconnected.")
-        self._update_button_states()
+            self._log("Disconnected")
 
     def _monitor_serial(self):
-        self._log("Serial monitor thread started.")
+        """Thread function to monitor serial data from Arduino"""
         while not self.stop_monitor_thread.is_set():
-            if not (self.serial_port and self.serial_port.is_open):
-                if not self.stop_monitor_thread.is_set():
-                    self._log("Serial port closed or unavailable in monitor thread.")
-                    self.master.after(0, self._handle_serial_error_in_main_thread)
-                break 
-            try:
-                if self.serial_port.in_waiting > 0:
-                    line = self.serial_port.readline().decode('utf-8', errors='replace').strip()
-                    if line:
-                        self.master.after(0, self._process_feedback, line)
-            except serial.SerialException as e:
-                if not self.stop_monitor_thread.is_set():
-                     self._log(f"SerialException in monitor: {e}. Stopping monitor.")
-                     self.master.after(0, self._handle_serial_error_in_main_thread)
-                break
-            except Exception as e:
-                if not self.stop_monitor_thread.is_set():
-                    self._log(f"ERR: Reading serial: {e}")
-                time.sleep(0.05)
-            time.sleep(0.01)
-        self._log("Serial monitor thread stopped.")
-
-    def _handle_serial_error_in_main_thread(self):
-        if self.is_connected:
-            self._log("Connection lost. Attempting to disconnect UI.")
-            self.is_connected = False
-            self._toggle_connection()
+            if self.serial_port and self.serial_port.is_open:
+                try:
+                    if self.serial_port.in_waiting:
+                        line = self.serial_port.readline().decode('utf-8').strip()
+                        self._log(f"← {line}")
+                        self._process_feedback(line)
+                except Exception as e:
+                    self._log(f"Error reading: {str(e)}")
+                    break
+            time.sleep(0.1)
 
     def _process_feedback(self, data):
-        self._log(f"← {data}")
+        """Process feedback data from Arduino"""
         try:
+            # Parse data format: "DATA:sensor:value"
             if data.startswith("DATA:"):
                 parts = data.split(":")
                 if len(parts) >= 3:
-                    sensor, value = parts[1].lower(), parts[2]
+                    sensor = parts[1].lower()
+                    value = parts[2]
+                    
+                    # Update sensor data dictionary
                     self.sensor_data[sensor] = value
-                    if sensor == 'front': self.front_dist.set(f"F: {value} cm")
-                    elif sensor == 'left': self.left_dist.set(f"L: {value} cm")
-                    elif sensor == 'right': self.right_dist.set(f"R: {value} cm")
-                    elif sensor == 'back': self.back_dist.set(f"B: {value} cm")
-            elif data.startswith("POS:"):
-                parts = data.split(":")
-                if len(parts) >= 3: # POS:row:col or POS:row:col:orientation
-                    r, c = int(parts[1]), int(parts[2])
-                    self.car_location = (r, c)
-                    # if len(parts) == 4: self.car_orientation_for_path_gen = int(parts[3]) # Update if Arduino sends it
-                    self._draw(self.path)
+                    
+                    # Update UI elements
+                    if sensor == 'front':
+                        self.front_dist.set(f"{value} cm")
+                    elif sensor == 'right':
+                        self.right_dist.set(f"{value} cm")
+                    elif sensor == 'left':
+                        self.left_dist.set(f"{value} cm")
+                    elif sensor == 'back':
+                        self.back_dist.set(f"{value} cm")
+            
+            # Process execution status update
             elif data.startswith("STEP:"):
-                step_idx = int(data.split(":")[1])
-                self.current_step = step_idx
-                total_segments = self.movement_commands_detailed_str.count(';')
-                self.step_var.set(f"Step: {step_idx + 1}/{total_segments}")
+                try:
+                    step = int(data.split(":")[1])
+                    self.current_step = step
+                    self.step_var.set(f"Step: {step}/{len(self.movement_commands)}")
+                    
+                    # Update car location in maze
+                    self._update_car_location(step)
+                except ValueError:
+                    pass
+            
             elif data.startswith("STATUS:"):
-                status_msg = data.split(":", 1)[1]
-                self.execution_status = status_msg
-                self.status_var.set(f"Status: {status_msg}")
-
-                if "Path received" in status_msg:
-                    self.gui_path_confirmed_by_arduino = True
-                elif "Completed" in status_msg or "Stopped" in status_msg:
-                    # After completion/stop, path is no longer "pending" on Arduino for a new EXEC command
-                    # It might still be in Arduino's memory, but for new EXEC, we might want re-confirmation.
-                    # For simplicity, let's say confirmed until new path is generated in GUI.
-                    # self.gui_path_confirmed_by_arduino = False # Or keep True if re-exec is desired
-                    pass 
+                status = data.split(":", 1)[1]
+                self.execution_status = status
+                self.status_var.set(f"Status: {status}")
                 
-                self._update_button_states() # Update based on new status
-                if "Completed" in status_msg and self.path:
-                    self.car_location = self.path[-1]
+                # Handle completion
+                if status.lower() == "completed":
+                    self.execute_path_button.config(state=tk.NORMAL)
+                    self.stop_button.config(state=tk.DISABLED)
+            
+            # Update car location if position received
+            elif data.startswith("POS:"):
+                try:
+                    parts = data.split(":")
+                    row = int(parts[1])
+                    col = int(parts[2])
+                    self.car_location = (row, col)
                     self._draw(self.path)
+                except (ValueError, IndexError):
+                    pass
         except Exception as e:
-            self._log(f"ERR: Processing Arduino msg '{data}': {e}")
-
-    def _update_button_states(self, path_just_sent_successfully=False):
-        is_currently_executing = self.execution_status.lower().startswith("executing")
-        path_is_generated_in_gui = bool(self.path and self.movement_commands_detailed_str)
-
-        if path_just_sent_successfully:
-            self.gui_path_confirmed_by_arduino = True # Mark current GUI path as on Arduino
-
-        # Test buttons
-        for btn_widget in self.test_buttons.values():
-            btn_widget.config(state=tk.NORMAL if self.is_connected and not is_currently_executing else tk.DISABLED)
+            self._log(f"Error processing feedback: {str(e)}")
+    
+    def _update_car_location(self, step_index):
+        """Update car location based on current step in path execution"""
+        if not self.path or step_index >= len(self.path):
+            return
         
-        # Send Path Button:
-        # Enabled if connected, path is generated in GUI, not executing, AND current GUI path is NOT yet confirmed on Arduino.
-        can_send = self.is_connected and path_is_generated_in_gui and \
-                   not is_currently_executing and not self.gui_path_confirmed_by_arduino
-        self.send_path_button.config(state=tk.NORMAL if can_send else tk.DISABLED)
-
-        # Execute Path Button:
-        # Enabled if connected, path is generated in GUI, current GUI path IS confirmed on Arduino, AND not executing.
-        can_execute = self.is_connected and path_is_generated_in_gui and \
-                      self.gui_path_confirmed_by_arduino and not is_currently_executing
-        self.execute_path_button.config(state=tk.NORMAL if can_execute else tk.DISABLED)
+        # Set car location to current step in path
+        self.car_location = self.path[step_index]
+        self._draw(self.path)
         
-        # Stop Button
-        self.stop_button.config(state=tk.NORMAL if self.is_connected and is_currently_executing else tk.DISABLED)
-
-
-    def _check_connection(self, action_name="Action", silent=False):
-        if not self.is_connected or not self.serial_port or not self.serial_port.is_open:
-            if not silent:
-                messagebox.showwarning("Not Connected", f"Cannot perform '{action_name}'. Please connect to Arduino.")
-            return False
-        return True
-
-    def _refresh_ports(self):
-        ports = [p.device for p in serial.tools.list_ports.comports()]
-        self.port_combo['values'] = ports
-        if ports:
-            current_selection = self.port_var.get()
-            if current_selection in ports:
-                self.port_combo.set(current_selection)
-            else:
-                self.port_combo.current(0)
-        else:
-            self.port_var.set("")
-
-    def _export_path(self):
-        if not self.path: messagebox.showwarning("No Path", "Solve maze first."); return
-        fp = filedialog.asksaveasfilename(defaultextension=".txt", filetypes=[("Text files", "*.txt")])
-        if not fp: return
-        try:
-            with open(fp, 'w') as f:
-                f.write(f"Path ({len(self.path)-1} moves):\n")
-                for r,c in self.path: f.write(f"({r},{c})\n")
-                f.write(f"\nSimple Commands ({len(self.movement_commands)}):\n{self.movement_commands}\n")
-                f.write(f"\nDetailed Commands for Arduino ({self.movement_commands_detailed_str.count(';')} segments):\n{self.movement_commands_detailed_str}\n")
-            self.status.set("Path exported.")
-        except Exception as e: messagebox.showerror("Export Error", str(e)); self._log(f"ERR: Export path: {e}")
-
-    def _save_maze(self):
-        fp = filedialog.asksaveasfilename(defaultextension=".json", filetypes=[("JSON files", "*.json")])
-        if not fp: return
-        data = {'R': self.R, 'C': self.C, 'hw': self.hw, 'vw': self.vw,
-                'start': self.start, 'end': self.end, 'car_location': self.car_location}
-        try:
-            with open(fp, 'w') as f: json.dump(data, f, indent=2)
-            self.status.set("Maze saved.")
-        except Exception as e: messagebox.showerror("Save Error", str(e)); self._log(f"ERR: Save maze: {e}")
-
-    def _load_maze(self):
-        fp = filedialog.askopenfilename(filetypes=[("JSON files", "*.json")])
-        if not fp: return
-        try:
-            with open(fp, 'r') as f: data = json.load(f)
+    def _send_test_command(self, command):
+        """Send a single test movement command to Arduino"""
+        if not self.is_connected or not self.serial_port:
+            messagebox.showwarning("Not Connected", "Please connect to Arduino first")
+            return
             
-            old_R, old_C = self.R, self.C
-            self.R = data['R']; self.C = data['C']
-            self.hw = data['hw']; self.vw = data['vw']
-            self.start = tuple(data['start']) if data.get('start') else None
-            self.end = tuple(data['end']) if data.get('end') else None
-            self.car_location = tuple(data['car_location']) if data.get('car_location') else self.start
-
-            self.path = []
-            self.movement_commands = ""
-            self.movement_commands_detailed_str = ""
-            self.gui_path_confirmed_by_arduino = False # Reset flag
-
-            if self.R != old_R or self.C != old_C or not (hasattr(self, 'canvas') and self.canvas.winfo_exists()):
-                canvas_size = 500
-                self.SW = canvas_size // max(self.C, self.R, 1)
-                self.canvas_width = self.C * self.SW
-                self.canvas_height = self.R * self.SW
-                if hasattr(self, 'canvas') and self.canvas.winfo_exists():
-                    self.canvas.config(width=self.canvas_width, height=self.canvas_height)
-                else:
-                    self._build_ui() 
-            
-            self.status.set("Maze loaded.")
-            self._draw()
-            self._update_button_states()
-        except Exception as e: messagebox.showerror("Load Error", str(e)); self._log(f"ERR: Load maze: {e}")
-
-    def _export_image(self):
-        fp = filedialog.asksaveasfilename(defaultextension=".png", filetypes=[("PNG images", "*.png")])
-        if not fp: return
         try:
-            ps_data = self.canvas.postscript(colormode='color')
-            img = Image.open(io.BytesIO(ps_data.encode('utf-8')))
-            img.save(fp)
-            self.status.set("Image saved.")
-        except Exception as e: messagebox.showerror("Image Save Error", str(e)); self._log(f"ERR: Export image: {e}")
+            # Format: "CMD:X" where X is F, B, L, R, or S
+            cmd = f"CMD:{command}\n"
+            self.serial_port.write(cmd.encode())
+            self._log(f"→ {cmd.strip()}")
+        except Exception as e:
+            self._log(f"Error sending command: {str(e)}")
+
+    def _generate_movement_commands(self):
+        """Convert path cells to movement commands for the car"""
+        if not self.path or len(self.path) < 2:
+            self.movement_commands = []
+            return
+            
+        # Initialize with start position and north orientation
+        current_pos = self.path[0]
+        current_orientation = 0  # Start facing North
+        commands = []
+        
+        for next_pos in self.path[1:]:
+            # Calculate direction vector
+            dr = next_pos[0] - current_pos[0]
+            dc = next_pos[1] - current_pos[1]
+            move_dir = (dr, dc)
+            
+            # Determine target orientation based on movement direction
+            target_orientation = None
+            if move_dir == (1, 0):   # Moving down (South)
+                target_orientation = 2
+            elif move_dir == (-1, 0): # Moving up (North)
+                target_orientation = 0
+            elif move_dir == (0, 1):  # Moving right (East)
+                target_orientation = 1
+            elif move_dir == (0, -1): # Moving left (West)
+                target_orientation = 3
+                
+            # Get turning commands to face the right direction
+            if target_orientation is not None:
+                turn_cmd = self.orientation_commands[target_orientation][current_orientation]
+                commands.append(turn_cmd)
+                
+                # Update orientation
+                current_orientation = target_orientation
+                
+                # Add forward command to move to next cell
+                commands.append('F')
+                
+            # Update current position
+            current_pos = next_pos
+            
+        # Join all commands into a single string
+        self.movement_commands = ''.join(commands)
+        return self.movement_commands
+
+    def _send_path_to_car(self):
+        """Send the computed path to Arduino"""
+        if not self.is_connected or not self.serial_port:
+            messagebox.showwarning("Not Connected", "Please connect to Arduino first")
+            return
+            
+        if not self.movement_commands:
+            if not self.path:
+                messagebox.showwarning("No Path", "Please solve the maze first")
+                return
+            self._generate_movement_commands()
+            
+        try:
+            # Format for Arduino: "PATH:commands"
+            cmd = f"PATH:{self.movement_commands}\n"
+            self.serial_port.write(cmd.encode())
+            self._log(f"→ Path sent: {self.movement_commands}")
+            
+            # Enable execute button
+            self.execute_path_button.config(state=tk.NORMAL)
+            
+        except Exception as e:
+            self._log(f"Error sending path: {str(e)}")
+            messagebox.showerror("Send Error", str(e))
+
+    def _execute_path(self):
+        """Tell Arduino to start executing the path"""
+        if not self.is_connected or not self.serial_port:
+            messagebox.showwarning("Not Connected", "Please connect to Arduino first")
+            return
+            
+        try:
+            # Send execute command
+            cmd = "EXEC\n"
+            self.serial_port.write(cmd.encode())
+            self._log("→ Execute command sent")
+            
+            # Update UI
+            self.execute_path_button.config(state=tk.DISABLED)
+            self.stop_button.config(state=tk.NORMAL)
+            self.status_var.set("Status: Executing")
+            
+        except Exception as e:
+            self._log(f"Error executing path: {str(e)}")
+            messagebox.showerror("Execute Error", str(e))
+
+    def _stop_execution(self):
+        """Send stop command to Arduino"""
+        if not self.is_connected or not self.serial_port:
+            return
+            
+        try:
+            # Send stop command
+            cmd = "STOP\n"
+            self.serial_port.write(cmd.encode())
+            self._log("→ Stop command sent")
+            
+            # Update UI
+            self.execute_path_button.config(state=tk.NORMAL)
+            self.stop_button.config(state=tk.DISABLED)
+            
+        except Exception as e:
+            self._log(f"Error stopping execution: {str(e)}")
 
     def _log(self, message):
-        if not hasattr(self, 'log_text') or not self.log_text.winfo_exists(): return
-        timestamp = time.strftime("%H:%M:%S")
+        """Add message to log display with timestamp"""
+        timestamp = time.strftime("%H:%M:%S", time.localtime())
         log_entry = f"[{timestamp}] {message}\n"
-        def append_log():
-            self.log_text.insert(tk.END, log_entry)
-            self.log_text.see(tk.END)
-            if float(self.log_text.index('end-1c')) > 500.0:
-                 self.log_text.delete('1.0', '2.0')
-        if self.master.winfo_exists():
-             self.master.after(0, append_log)
+        
+        # Insert at end and scroll to see it
+        self.log_text.insert(tk.END, log_entry)
+        self.log_text.see(tk.END)
+        
+        # Keep log size manageable (max 1000 lines)
+        lines = int(self.log_text.index('end-1c').split('.')[0])
+        if lines > 1000:
+            self.log_text.delete(1.0, 2.0)
 
-    def _on_closing(self):
-        if messagebox.askokcancel("Quit", "Do you want to quit?"):
-            self.stop_monitor_thread.set()
-            if self.is_connected and self.serial_port and self.serial_port.is_open:
-                try:
-                    if self.execution_status.lower().startswith("executing"):
-                        self.serial_port.write(b"STOP\n")
-                        self._log("Sent STOP on quit while executing.")
-                        time.sleep(0.1)
-                except Exception as e:
-                    self._log(f"Exception sending STOP on quit: {e}")
-            
-            if self.monitor_thread and self.monitor_thread.is_alive():
-                self.monitor_thread.join(timeout=0.5)
-            
-            if self.serial_port and self.serial_port.is_open:
-                try:
-                    self.serial_port.close()
-                    self._log("Serial port closed on quit.")
-                except Exception as e:
-                    self._log(f"Exception closing serial port on quit: {e}")
-            
-            self.master.destroy()
-
+# Run the application
 if __name__ == "__main__":
     root = tk.Tk()
     app = MazeSolverGUI(root)
