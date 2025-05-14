@@ -23,7 +23,13 @@ class MazeSolverGUI:
         self.monitor_thread = None
         
         # Arduino feedback data
-      
+        # Arduino feedback data
+        self.sensor_data = {
+            'front': '0',
+            'right': '0',
+            'left': '0',
+            'back': '0'
+        }
         self.current_step = 0
         self.execution_status = "Not started"
         
